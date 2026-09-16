@@ -32,7 +32,7 @@
       position: fixed;
       z-index: 99;
       pointer-events: auto;
-      display: none; /* Enabled dynamically for mobile devices */
+      display: none;
     }
     .d-pad {
       bottom: 20px;
@@ -73,7 +73,6 @@
 <body>
   <canvas id="gameCanvas" width="1000" height="600"></canvas>
 
-  <!-- Mobile On-Screen Controls -->
   <div class="touch-ui d-pad" id="group-dpad">
     <div></div>
     <div class="t-btn" id="btn-up">▲</div>
@@ -95,7 +94,6 @@
   </div>
 
   <script>
-    // --- Dynamic Mobile/Touch Detection ---
     const isTouchDevice = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0) || window.matchMedia("(pointer: coarse)").matches;
     if (isTouchDevice) {
       document.getElementById("group-dpad").style.display = "grid";
@@ -208,9 +206,12 @@
       },
       homing_blasts: {
         name: "Hunter Torpedoes",
-        desc: "Boosted projectile velocity",
+        desc: "Fires seeking missile torpedoes",
         children: ["hyper_homing"],
-        apply: (p) => { p.laser_speed = 18.0; }
+        apply: (p) => { 
+          p.laser_speed = 12.0; 
+          p.is_missile = true; 
+        }
       },
       hyper_homing: {
         name: "Predator Swarm",
@@ -511,6 +512,7 @@
         shot_damage: 1,
         piercing: false,
         laser_speed: 14.0,
+        is_missile: false,
         magnet_range: 160,
         orb_accel: 0.09,
         ram_power: 1.0,
@@ -583,8 +585,8 @@
           }
         }
       } else {
-        if (e.code === "KeyE" && myShip.has_autopilot) {
-          if (myShip.mana > 0) {
+        if (e.code === "KeyE") {
+          if (myShip.has_autopilot && myShip.mana > 0) {
             myShip.autopilot_active = !myShip.autopilot_active;
           } else {
             myShip.autopilot_active = false;
@@ -640,7 +642,17 @@
     bindTouch("btn-left", "KeyA");
     bindTouch("btn-right", "KeyD");
     bindTouch("btn-fire", "Space");
-    bindTouch("btn-auto", "KeyE", true);
+
+    const autoBtn = document.getElementById("btn-auto");
+    if (autoBtn) {
+      autoBtn.addEventListener("touchstart", (e) => {
+        e.preventDefault();
+        if (myShip && myShip.has_autopilot && myShip.mana > 0) {
+          myShip.autopilot_active = !myShip.autopilot_active;
+        }
+      });
+    }
+
     bindTouch("btn-1", "Digit1", true);
     bindTouch("btn-2", "Digit2", true);
     bindTouch("btn-3", "Digit3", true);
@@ -833,7 +845,8 @@
                 owner: myId,
                 dmg: myShip.shot_damage,
                 pierce: myShip.piercing,
-                speed: myShip.laser_speed
+                speed: myShip.laser_speed,
+                is_missile: myShip.is_missile || false
               };
               lasers.push(l);
               newLocalLasers.push(l);
@@ -873,7 +886,8 @@
               owner: myId,
               dmg: myShip.shot_damage,
               pierce: myShip.piercing,
-              speed: myShip.laser_speed
+              speed: myShip.laser_speed,
+              is_missile: myShip.is_missile || false
             };
             lasers.push(l);
             newLocalLasers.push(l);
@@ -943,6 +957,25 @@
 
       for (let i = lasers.length - 1; i >= 0; i--) {
         const l = lasers[i];
+
+        if (l.is_missile) {
+          let nearestTarget = null;
+          let minD = 500;
+          for (const pid in remoteShips) {
+            const p = remoteShips[pid];
+            const dist = Math.hypot(p.world_x - l.x, p.world_y - l.y);
+            if (dist < minD) {
+              minD = dist;
+              nearestTarget = p;
+            }
+          }
+          if (nearestTarget) {
+            const targetAng = ((Math.atan2(-(nearestTarget.world_y - l.y), nearestTarget.world_x - l.x) * 180) / Math.PI + 360) % 360;
+            const diff = ((targetAng - l.angle + 180) % 360) - 180;
+            l.angle += Math.max(-5, Math.min(5, diff));
+          }
+        }
+
         const r = (l.angle * Math.PI) / 180;
         const spd = l.speed || 14.0;
         l.x += spd * Math.cos(r);
@@ -984,9 +1017,12 @@
         }
 
         if (l.owner !== myId) {
-          if (Math.hypot(l.x - myShip.world_x, l.y - myShip.world_y) < SHIP_SIZE) {
+          if (Math.hypot(l.x - myShip.world_x, l.y - myShip.world_y) < SHIP_SIZE + 4) {
             myShip.hp -= l.dmg || 1;
             if (!l.pierce) lasers.splice(i, 1);
+            if (myShip.hp <= 0) {
+              myShip.hp = 0;
+            }
           }
         }
       }
