@@ -6,6 +6,7 @@ import string
 import websockets
 
 PORT = int(os.environ.get("PORT", 8765))
+MAX_PLAYERS = 6
 ROOMS = {}
 
 def generate_room_code():
@@ -41,7 +42,7 @@ async def handle_client(websocket):
             elif action == "list_public":
                 available = [
                     code for code, info in ROOMS.items()
-                    if info["is_public"] and len(info["clients"]) < 2
+                    if info["is_public"] and len(info["clients"]) < MAX_PLAYERS
                 ]
                 await websocket.send(json.dumps({"status": "ok", "rooms": available}))
 
@@ -54,21 +55,28 @@ async def handle_client(websocket):
                     continue
 
                 room = ROOMS[room_code]
-                if len(room["clients"]) >= 2:
-                    await websocket.send(json.dumps({"status": "error", "msg": "Room is full."}))
+                if len(room["clients"]) >= MAX_PLAYERS:
+                    await websocket.send(json.dumps({"status": "error", "msg": "Room is full (Max 6)."}))
                     continue
 
                 if room["password"] is not None and room["password"] != password:
                     await websocket.send(json.dumps({"status": "error", "msg": "Invalid password."}))
                     continue
 
-                room["clients"].append(websocket)
-                room["players"][2] = websocket
-                current_room = room_code
-                player_id = 2
+                # Find next available player slot 1-6
+                assigned_id = next(i for i in range(1, MAX_PLAYERS + 1) if i not in room["players"])
 
-                await websocket.send(json.dumps({"status": "ok", "room_code": room_code, "player_id": 2}))
-                await room["players"][1].send(json.dumps({"action": "player_joined", "player_id": 2}))
+                room["clients"].append(websocket)
+                room["players"][assigned_id] = websocket
+                current_room = room_code
+                player_id = assigned_id
+
+                await websocket.send(json.dumps({"status": "ok", "room_code": room_code, "player_id": assigned_id}))
+                
+                # Notify other players
+                for peer in room["clients"]:
+                    if peer != websocket:
+                        await peer.send(json.dumps({"action": "player_joined", "player_id": assigned_id}))
 
             elif action == "game_packet":
                 if current_room and current_room in ROOMS:
@@ -84,16 +92,18 @@ async def handle_client(websocket):
             room = ROOMS[current_room]
             if websocket in room["clients"]:
                 room["clients"].remove(websocket)
+            if player_id in room["players"]:
+                del room["players"][player_id]
             for peer in room["clients"]:
                 try:
-                    await peer.send(json.dumps({"action": "player_left"}))
+                    await peer.send(json.dumps({"action": "player_left", "player_id": player_id}))
                 except Exception:
                     pass
             if not room["clients"]:
                 del ROOMS[current_room]
 
 async def main():
-    print(f"Server starting on port {PORT}...")
+    print(f"6-Player Server running on port {PORT}...")
     async with websockets.serve(handle_client, "0.0.0.0", PORT):
         await asyncio.Future()
 
