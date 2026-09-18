@@ -484,7 +484,8 @@
         }
 
         if (payload.hit_target !== undefined && Number(payload.hit_target) === myId) {
-          if (myShip && myShip.alive) {
+          // Strictly apply damage ONLY if player is currently alive
+          if (myShip && myShip.alive && myShip.hp > 0) {
             const dmgAmt = Number(payload.dmg) || 1;
             myShip.hp = Math.max(0, myShip.hp - dmgAmt);
             if (myShip.hp <= 0) {
@@ -729,11 +730,11 @@
     function drawOffscreenMarker(targetCtx, camX, camY, tx, ty, color) {
       const dx = tx - camX;
       const dy = ty - camY;
-      if (dx === 0 && dy === 0) return;
+      if (Math.abs(dx) < 0.01 && Math.abs(dy) < 0.01) return;
 
       const pad = 26;
-      const scaleX = dx !== 0 ? (V_WIDTH / 2 - pad) / Math.abs(dx) : Infinity;
-      const scaleY = dy !== 0 ? (V_HEIGHT / 2 - pad) / Math.abs(dy) : Infinity;
+      const scaleX = Math.abs(dx) > 0.001 ? (V_WIDTH / 2 - pad) / Math.abs(dx) : Infinity;
+      const scaleY = Math.abs(dy) > 0.001 ? (V_HEIGHT / 2 - pad) / Math.abs(dy) : Infinity;
       const s = Math.min(scaleX, scaleY);
       if (isNaN(s) || !isFinite(s)) return;
 
@@ -769,7 +770,7 @@
           renderGame();
         }
       } catch (err) {
-        console.error("Engine loop caught error:", err);
+        console.error("Game loop recovery:", err);
       }
 
       mouseClicked = false;
@@ -848,6 +849,7 @@
       let reportedDamageTarget = null;
       let reportedDamageAmount = 0;
 
+      // Handle local respawn clock
       if (!myShip.alive) {
         myShip.respawn_timer -= dt;
         myShip.vx = 0;
@@ -1081,6 +1083,7 @@
           }
         }
 
+        // Only register bullet strikes against active, living players
         if (Number(l.owner) === myId) {
           let hitPlayer = false;
           for (const pid in remoteShips) {
@@ -1346,7 +1349,6 @@
       }
 
       for (const l of lasers) {
-        if (!l) continue;
         const lx = l.x - camX + cx;
         const ly = l.y - camY + cy;
         const rad = (l.angle * Math.PI) / 180;
