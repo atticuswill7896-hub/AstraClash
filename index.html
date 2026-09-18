@@ -488,10 +488,7 @@
             const dmgAmt = Number(payload.dmg) || 1;
             myShip.hp = Math.max(0, myShip.hp - dmgAmt);
             if (myShip.hp <= 0) {
-              myShip.hp = 0;
-              myShip.alive = false;
-              myShip.respawn_timer = 10.0;
-              myShip.autopilot_active = false;
+              wipeShipOnDeath();
             }
           }
         }
@@ -525,11 +522,14 @@
     let ores = [];
     let asteroids = [];
 
-    // Throttled network packet accumulators to stay strictly under Render CPU limits
     let netAccumulator = 0;
-    const NET_TICK_RATE = 0.05; // 20 updates per second (20Hz)
+    const NET_TICK_RATE = 0.05; // 20 Hz tick
     let worldSyncAccumulator = 0;
-    const WORLD_SYNC_RATE = 0.5; // Host broadcasts asteroid positions twice per second
+    const WORLD_SYNC_RATE = 0.5; // Host broadcasts world objects twice per second
+    let oreRegenAccumulator = 0;
+    const ORE_REGEN_INTERVAL = 4.0; // Regenerate ores every 4s if below max
+    const MAX_WORLD_ORES = 75;
+
     let outgoingLaserQueue = [];
     let pendingHitTarget = null;
     let pendingHitDmg = 0;
@@ -576,6 +576,37 @@
     }
     initMyShip();
 
+    function wipeShipOnDeath() {
+      myShip.hp = 0;
+      myShip.alive = false;
+      myShip.respawn_timer = 10.0;
+      myShip.autopilot_active = false;
+
+      // Wipe all levels, pending upgrade choices, and revert stats to baseline
+      myShip.xp = 0;
+      myShip.tier = 0;
+      myShip.current_node = "root";
+      myShip.max_hp = 6;
+      myShip.mana = 0;
+      myShip.max_mana = 100.0;
+      myShip.mana_mult = 1.0;
+      myShip.xp_mult = 1.0;
+      myShip.has_autopilot = false;
+      myShip.move_speed = BASE_MOVE_SPEED;
+      myShip.rot_speed = BASE_ROT_SPEED;
+      myShip.cannons = 1;
+      myShip.cooldown_max = 0.20;
+      myShip.spread_shot = false;
+      myShip.rear_cannon = false;
+      myShip.shot_damage = 1;
+      myShip.piercing = false;
+      myShip.laser_speed = 14.0;
+      myShip.is_missile = false;
+      myShip.magnet_range = 160;
+      myShip.orb_accel = 0.09;
+      myShip.ram_power = 1.0;
+    }
+
     function createAsteroid(idx) {
       const is_ore = Math.random() < 0.25;
       return {
@@ -606,6 +637,14 @@
           y: Math.max(-WORLD_BOUND + 40, Math.min(WORLD_BOUND - 40, y + (-16 + Math.random() * 32)))
         });
       }
+    }
+
+    // Initial scatter of collectable XP ore crystals
+    for (let i = 0; i < 30; i++) {
+      ores.push({
+        x: -WORLD_BOUND * 0.7 + Math.random() * (WORLD_BOUND * 1.4),
+        y: -WORLD_BOUND * 0.7 + Math.random() * (WORLD_BOUND * 1.4)
+      });
     }
 
     const keysDown = {};
@@ -648,21 +687,24 @@
           }
         }
 
-        const currentNode = myShip.current_node;
-        const options = UPGRADE_TREE[currentNode]?.children || [];
-        const nextTier = myShip.tier + 1;
+        // Only process tier selections if alive
+        if (myShip && myShip.alive) {
+          const currentNode = myShip.current_node;
+          const options = UPGRADE_TREE[currentNode]?.children || [];
+          const nextTier = myShip.tier + 1;
 
-        if (options.length > 0 && nextTier < TIER_XP_THRESHOLDS.length && myShip.xp >= TIER_XP_THRESHOLDS[nextTier]) {
-          let chosenIdx = null;
-          if (e.code === "Digit1" && options.length >= 1) chosenIdx = 0;
-          if (e.code === "Digit2" && options.length >= 2) chosenIdx = 1;
-          if (e.code === "Digit3" && options.length >= 3) chosenIdx = 2;
+          if (options.length > 0 && nextTier < TIER_XP_THRESHOLDS.length && myShip.xp >= TIER_XP_THRESHOLDS[nextTier]) {
+            let chosenIdx = null;
+            if (e.code === "Digit1" && options.length >= 1) chosenIdx = 0;
+            if (e.code === "Digit2" && options.length >= 2) chosenIdx = 1;
+            if (e.code === "Digit3" && options.length >= 3) chosenIdx = 2;
 
-          if (chosenIdx !== null) {
-            const nodeKey = options[chosenIdx];
-            myShip.tier = nextTier;
-            myShip.current_node = nodeKey;
-            UPGRADE_TREE[nodeKey].apply(myShip);
+            if (chosenIdx !== null) {
+              const nodeKey = options[chosenIdx];
+              myShip.tier = nextTier;
+              myShip.current_node = nodeKey;
+              UPGRADE_TREE[nodeKey].apply(myShip);
+            }
           }
         }
       }
@@ -782,7 +824,7 @@
           renderGame();
         }
       } catch (err) {
-        console.error("Loop error recovery:", err);
+        console.error("Game loop recovery:", err);
       }
 
       mouseClicked = false;
@@ -806,23 +848,12 @@
         ];
 
         for (const b of buttons) {
-          if (mouseClicked && mousePos.x >= cx - 150 && mousePos.x <= cx + 150 && mousePos.y >= b.y && mousePos.y <= b.y + 48) {
-            connectWs();
-            if (b.action === "quick") {
-              sendMsg({ action: "list_public" });
-              statusMessage = "Searching public games...";
-              statusColor = RAINBOW[3];
-            } else if (b.action === "host") {
-              menuMode = "host_private";
-              passwordInput = "";
-              activeInput = "pass";
-            } else if (b.action === "join") {
-              menuMode = "join_private";
-              roomCodeInput = "";
-              passwordInput = "";
-              activeInput = "code";
-            }
-          }
+          const hovered = mousePos.x >= cx - 150 && mousePos.x <= cx + 150 && mousePos.y >= b.y && mousePos.y <= b.y + 48;
+          drawCard(vctx, cx - 150, b.y, 300, 48, hovered ? CYAN : b.col);
+
+          vctx.font = "bold 16px Consolas";
+          vctx.fillStyle = hovered ? CYAN : b.col;
+          vctx.fillText(b.text, cx, b.y + 30);
         }
       } else if (menuMode === "host_private") {
         if (mouseClicked) {
@@ -868,7 +899,7 @@
           myShip.world_y = Number((-WORLD_BOUND * 0.4 + Math.random() * (WORLD_BOUND * 0.8)).toFixed(1));
           myShip.vx = 0.0;
           myShip.vy = 0.0;
-          myShip.mana = Math.max(0.0, myShip.mana - 30.0);
+          myShip.mana = 25.0;
           myShip.respawn_timer = 0;
         }
       }
@@ -1016,6 +1047,40 @@
         }
       }
 
+      // Asteroid-to-asteroid 2D elastic collisions
+      for (let i = 0; i < asteroids.length; i++) {
+        const a1 = asteroids[i];
+        for (let j = i + 1; j < asteroids.length; j++) {
+          const a2 = asteroids[j];
+          const dx = a2.x - a1.x;
+          const dy = a2.y - a1.y;
+          const dist = Math.hypot(dx, dy);
+          const minDist = a1.r + a2.r;
+
+          if (dist < minDist && dist > 0.01) {
+            const nx = dx / dist;
+            const ny = dy / dist;
+            const overlap = (minDist - dist) * 0.5;
+
+            // Separate overlapping asteroids
+            a1.x -= nx * overlap;
+            a1.y -= ny * overlap;
+            a2.x += nx * overlap;
+            a2.y += ny * overlap;
+
+            // Elastic impulse
+            const kx = a1.vx - a2.vx;
+            const ky = a1.vy - a2.vy;
+            const p = 2 * (nx * kx + ny * ky) / 2;
+
+            a1.vx -= p * nx;
+            a1.vy -= p * ny;
+            a2.vx += p * nx;
+            a2.vy += p * ny;
+          }
+        }
+      }
+
       for (let i = lasers.length - 1; i >= 0; i--) {
         const l = lasers[i];
         if (!l) {
@@ -1114,6 +1179,7 @@
         if (a.y < -WORLD_BOUND + a.r || a.y > WORLD_BOUND - a.r) a.vy *= -1;
       }
 
+      // Collect ores and gain XP & Mana
       if (myShip.alive) {
         for (let i = ores.length - 1; i >= 0; i--) {
           const o = ores[i];
@@ -1130,7 +1196,24 @@
         }
       }
 
-      // Throttled Network Update: Emits 20 times/sec instead of 60 to prevent Render CPU starvation
+      // Host regenerates ores when depleted
+      if (myId === 1) {
+        oreRegenAccumulator += dt;
+        if (oreRegenAccumulator >= ORE_REGEN_INTERVAL) {
+          oreRegenAccumulator = 0;
+          if (ores.length < MAX_WORLD_ORES) {
+            const numSpawn = Math.min(6, MAX_WORLD_ORES - ores.length);
+            for (let k = 0; k < numSpawn; k++) {
+              ores.push({
+                x: -WORLD_BOUND * 0.8 + Math.random() * (WORLD_BOUND * 1.6),
+                y: -WORLD_BOUND * 0.8 + Math.random() * (WORLD_BOUND * 1.6)
+              });
+            }
+          }
+        }
+      }
+
+      // Throttled network packet updates (20Hz)
       netAccumulator += dt;
       worldSyncAccumulator += dt;
 
@@ -1161,7 +1244,6 @@
           pendingHitDmg = 0;
         }
 
-        // Host sends asteroids and ores at 2Hz instead of 60Hz to reduce payload size by 97%
         if (myId === 1 && worldSyncAccumulator >= WORLD_SYNC_RATE) {
           worldSyncAccumulator = 0;
           outPayload.asteroids = asteroids.map(a => ({
@@ -1504,20 +1586,23 @@
       vctx.fillStyle = RAINBOW[3];
       vctx.fillText(`TIER ${myShip.tier}/5  XP: ${myShip.xp}/${nextReq}`, V_WIDTH - 150, 52);
 
-      const currentNode = myShip.current_node;
-      const options = UPGRADE_TREE[currentNode]?.children || [];
-      const nextTier = myShip.tier + 1;
+      // Upgrade choice card: only shows when alive and requirements are met
+      if (myShip.alive && myShip.hp > 0) {
+        const currentNode = myShip.current_node;
+        const options = UPGRADE_TREE[currentNode]?.children || [];
+        const nextTier = myShip.tier + 1;
 
-      if (options.length > 0 && nextTier < TIER_XP_THRESHOLDS.length && myShip.xp >= TIER_XP_THRESHOLDS[nextTier]) {
-        drawCard(vctx, V_WIDTH / 2 - 275, 38, 550, 46, RAINBOW[4]);
+        if (options.length > 0 && nextTier < TIER_XP_THRESHOLDS.length && myShip.xp >= TIER_XP_THRESHOLDS[nextTier]) {
+          drawCard(vctx, V_WIDTH / 2 - 275, 38, 550, 46, RAINBOW[4]);
 
-        for (let i = 0; i < Math.min(options.length, 3); i++) {
-          const optKey = options[i];
-          const optData = UPGRADE_TREE[optKey];
-          const txtStr = `[${i + 1}] ${optData.name}: ${optData.desc}`;
-          vctx.font = "bold 11px Consolas";
-          vctx.fillStyle = i === 0 ? WHITE : (i === 1 ? RAINBOW[3] : CYAN);
-          vctx.fillText(txtStr, V_WIDTH / 2 - 265, 50 + i * 13);
+          for (let i = 0; i < Math.min(options.length, 3); i++) {
+            const optKey = options[i];
+            const optData = UPGRADE_TREE[optKey];
+            const txtStr = `[${i + 1}] ${optData.name}: ${optData.desc}`;
+            vctx.font = "bold 11px Consolas";
+            vctx.fillStyle = i === 0 ? WHITE : (i === 1 ? RAINBOW[3] : CYAN);
+            vctx.fillText(txtStr, V_WIDTH / 2 - 265, 50 + i * 13);
+          }
         }
       }
     }
