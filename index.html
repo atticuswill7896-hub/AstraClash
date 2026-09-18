@@ -1076,6 +1076,9 @@
               p.hp = Math.max(0, p.hp - (l.dmg || 1));
               reportedDamageTarget = Number(p.id);
               reportedDamageAmount = l.dmg || 1;
+              if (p.hp <= 0) {
+                p.alive = false;
+              }
               lasers.splice(i, 1);
               hitPlayer = true;
               break;
