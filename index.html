@@ -469,7 +469,15 @@
           if (sId !== myId) {
             const s = payload.ship;
             if (!isNaN(s.world_x) && !isNaN(s.world_y)) {
-              remoteShips[sId] = s;
+              remoteShips[sId] = {
+                id: sId,
+                world_x: Number(s.world_x),
+                world_y: Number(s.world_y),
+                angle: Number(s.angle) || 0,
+                hp: Number(s.hp) || 0,
+                max_hp: Number(s.max_hp) || 6,
+                alive: Boolean(s.alive)
+              };
             }
           }
         }
@@ -845,8 +853,8 @@
         if (myShip.respawn_timer <= 0) {
           myShip.alive = true;
           myShip.hp = myShip.max_hp;
-          myShip.world_x = -WORLD_BOUND * 0.5 + Math.random() * WORLD_BOUND;
-          myShip.world_y = -WORLD_BOUND * 0.5 + Math.random() * WORLD_BOUND;
+          myShip.world_x = -WORLD_BOUND * 0.4 + Math.random() * (WORLD_BOUND * 0.8);
+          myShip.world_y = -WORLD_BOUND * 0.4 + Math.random() * (WORLD_BOUND * 0.8);
           myShip.vx = 0.0;
           myShip.vy = 0.0;
           myShip.mana = Math.max(0.0, myShip.mana - 30.0);
