@@ -114,8 +114,8 @@
     let canvasScale = 1;
 
     function resizeWindow() {
-      const winW = window.innerWidth;
-      const winH = window.innerHeight;
+      const winW = window.innerWidth || 1000;
+      const winH = window.innerHeight || 600;
       canvasScale = Math.min(winW / V_WIDTH, winH / V_HEIGHT);
       canvas.width = Math.floor(V_WIDTH * canvasScale);
       canvas.height = Math.floor(V_HEIGHT * canvasScale);
@@ -433,7 +433,7 @@
         if (action === "player_joined" || (menuMode === "waiting" && action === "player_joined")) {
           inLobby = false;
         } else if (status === "ok") {
-          if (msg.player_id !== undefined) myId = Number(msg.player_id);
+          if (msg.player_id !== undefined) myId = Number(msg.player_id) || 1;
           if (msg.room_code !== undefined) roomCode = msg.room_code;
           initMyShip();
 
@@ -467,16 +467,20 @@
         if (payload.ship && payload.ship.id !== undefined) {
           const sId = Number(payload.ship.id);
           if (sId !== myId) {
-            remoteShips[sId] = payload.ship;
+            const s = payload.ship;
+            if (!isNaN(s.world_x) && !isNaN(s.world_y)) {
+              remoteShips[sId] = s;
+            }
           }
         }
 
         if (payload.hit_target !== undefined && Number(payload.hit_target) === myId) {
-          if (myShip.alive) {
-            myShip.hp = Math.max(0, myShip.hp - (payload.dmg || 1));
+          if (myShip && myShip.alive) {
+            const dmgAmt = Number(payload.dmg) || 1;
+            myShip.hp = Math.max(0, myShip.hp - dmgAmt);
             if (myShip.hp <= 0) {
-              myShip.alive = false;
               myShip.hp = 0;
+              myShip.alive = false;
               myShip.respawn_timer = 10.0;
               myShip.autopilot_active = false;
             }
@@ -484,13 +488,13 @@
         }
 
         if (myId !== 1) {
-          if (payload.asteroids) asteroids = payload.asteroids;
-          if (payload.ores) ores = payload.ores;
+          if (Array.isArray(payload.asteroids)) asteroids = payload.asteroids;
+          if (Array.isArray(payload.ores)) ores = payload.ores;
         }
 
         if (payload.new_lasers && Array.isArray(payload.new_lasers)) {
           for (const rL of payload.new_lasers) {
-            if (Number(rL.owner) !== myId) {
+            if (Number(rL.owner) !== myId && !isNaN(rL.x) && !isNaN(rL.y)) {
               lasers.push(rL);
             }
           }
@@ -513,8 +517,8 @@
       const spawnRad = (angleOffset * Math.PI) / 180;
       myShip = {
         id: myId,
-        world_x: 400.0 * Math.cos(spawnRad),
-        world_y: 400.0 * Math.sin(spawnRad),
+        world_x: Number((400.0 * Math.cos(spawnRad)).toFixed(2)),
+        world_y: Number((400.0 * Math.sin(spawnRad)).toFixed(2)),
         vx: 0.0,
         vy: 0.0,
         angle: (angleOffset + 180.0) % 360.0,
@@ -702,6 +706,7 @@
     }
 
     function drawPolygon(targetCtx, pts, fill = false, stroke = true) {
+      if (!pts || pts.length === 0) return;
       targetCtx.beginPath();
       targetCtx.moveTo(pts[0].x, pts[0].y);
       for (let i = 1; i < pts.length; i++) {
@@ -721,6 +726,7 @@
       const scaleX = dx !== 0 ? (V_WIDTH / 2 - pad) / Math.abs(dx) : Infinity;
       const scaleY = dy !== 0 ? (V_HEIGHT / 2 - pad) / Math.abs(dy) : Infinity;
       const s = Math.min(scaleX, scaleY);
+      if (isNaN(s) || !isFinite(s)) return;
 
       const ex = V_WIDTH / 2 + dx * s;
       const ey = V_HEIGHT / 2 + dy * s;
@@ -745,12 +751,16 @@
       const dt = Math.min((now - lastTime) / 1000, 0.1);
       lastTime = now;
 
-      if (inLobby) {
-        updateLobby();
-        renderLobby();
-      } else {
-        updateGame(dt);
-        renderGame();
+      try {
+        if (inLobby) {
+          updateLobby();
+          renderLobby();
+        } else {
+          updateGame(dt);
+          renderGame();
+        }
+      } catch (err) {
+        console.error("Loop Error:", err);
       }
 
       mouseClicked = false;
@@ -827,13 +837,6 @@
       const newLocalLasers = [];
       let reportedDamageTarget = null;
       let reportedDamageAmount = 0;
-
-      if (myShip.alive && myShip.hp <= 0) {
-        myShip.alive = false;
-        myShip.hp = 0;
-        myShip.respawn_timer = 10.0;
-        myShip.autopilot_active = false;
-      }
 
       if (!myShip.alive) {
         myShip.respawn_timer -= dt;
@@ -1051,7 +1054,6 @@
               } else if (Math.random() < 0.25) {
                 spawnOreCluster(a.x, a.y, 2 + Math.floor(Math.random() * 3));
               }
-
               Object.assign(a, createAsteroid(a.id));
             }
             break;
@@ -1065,19 +1067,7 @@
           }
         }
 
-        if (Number(l.owner) !== myId) {
-          if (myShip.alive && myShip.hp > 0 && Math.hypot(l.x - myShip.world_x, l.y - myShip.world_y) < SHIP_SIZE + 6) {
-            myShip.hp = Math.max(0, myShip.hp - (l.dmg || 1));
-            lasers.splice(i, 1);
-            if (myShip.hp <= 0) {
-              myShip.alive = false;
-              myShip.hp = 0;
-              myShip.respawn_timer = 10.0;
-              myShip.autopilot_active = false;
-            }
-            continue;
-          }
-        } else {
+        if (Number(l.owner) === myId) {
           let hitPlayer = false;
           for (const pid in remoteShips) {
             const p = remoteShips[pid];
@@ -1118,7 +1108,15 @@
       }
 
       const outPayload = {
-        ship: myShip,
+        ship: {
+          id: myShip.id,
+          world_x: Number(myShip.world_x.toFixed(2)),
+          world_y: Number(myShip.world_y.toFixed(2)),
+          angle: Number(myShip.angle.toFixed(2)),
+          hp: myShip.hp,
+          max_hp: myShip.max_hp,
+          alive: myShip.alive
+        },
         new_lasers: newLocalLasers
       };
       if (reportedDamageTarget !== null) {
