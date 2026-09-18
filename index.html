@@ -96,7 +96,7 @@
 
   <script>
     const isTouchDevice = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0) || window.matchMedia("(pointer: coarse)").matches;
-    
+
     function updateTouchUIVisibility() {
       const showTouch = isTouchDevice && !inLobby;
       document.getElementById("group-dpad").style.display = showTouch ? "grid" : "none";
@@ -159,7 +159,7 @@
     const BASE_MOVE_SPEED = 5.0;
     const BASE_ROT_SPEED = 4.0;
     const WORLD_BOUND = 2000;
-    const ASTEROID_COUNT = 85;
+    const ASTEROID_COUNT = 40; // Optimized from 85 to drastically reduce N^2 collision checks
     const SHIP_SIZE = 20;
 
     const UPGRADE_TREE = {
@@ -343,8 +343,9 @@
 
     const TIER_XP_THRESHOLDS = [0, 80, 180, 300, 440, 600];
 
+    // Starfield reduced to 30 to lower per-frame draw overhead
     const stars = [];
-    for (let i = 0; i < 90; i++) {
+    for (let i = 0; i < 30; i++) {
       stars.push({
         x: Math.random() * V_WIDTH,
         y: Math.random() * V_HEIGHT,
@@ -353,14 +354,13 @@
     }
 
     function drawStarfield(targetCtx, w, h) {
-      for (const s of stars) {
+      for (let i = 0; i < stars.length; i++) {
+        const s = stars[i];
         s.y = (s.y + s.speed * 0.3) % h;
         s.x = (s.x + s.speed * 0.08) % w;
         const val = Math.floor(Math.min(255, s.speed * 120));
         targetCtx.fillStyle = `rgb(${val}, ${val}, ${val + 15})`;
-        targetCtx.beginPath();
-        targetCtx.arc(s.x, s.y, s.speed, 0, Math.PI * 2);
-        targetCtx.fill();
+        targetCtx.fillRect(s.x, s.y, s.speed * 1.5, s.speed * 1.5);
       }
     }
 
@@ -531,12 +531,12 @@
     let asteroids = [];
 
     let netAccumulator = 0;
-    const NET_TICK_RATE = 0.05; // 20 Hz tick
+    const NET_TICK_RATE = 0.05; // 20 Hz
     let worldSyncAccumulator = 0;
     const WORLD_SYNC_RATE = 0.5; // Host syncs world objects at 2Hz
     let oreRegenAccumulator = 0;
-    const ORE_REGEN_INTERVAL = 4.0; // Regenerate ores every 4s
-    const MAX_WORLD_ORES = 75;
+    const ORE_REGEN_INTERVAL = 4.0;
+    const MAX_WORLD_ORES = 50;
 
     let outgoingLaserQueue = [];
     let pendingHitTarget = null;
@@ -590,7 +590,7 @@
       myShip.respawn_timer = 10.0;
       myShip.autopilot_active = false;
 
-      // Fully reset levels, tier progress, pending choices, and stats
+      // Wipe levels, tier progression, pending upgrade choices, and reset stats
       myShip.xp = 0;
       myShip.tier = 0;
       myShip.current_node = "root";
@@ -647,7 +647,7 @@
       }
     }
 
-    for (let i = 0; i < 30; i++) {
+    for (let i = 0; i < 25; i++) {
       ores.push({
         x: -WORLD_BOUND * 0.7 + Math.random() * (WORLD_BOUND * 1.4),
         y: -WORLD_BOUND * 0.7 + Math.random() * (WORLD_BOUND * 1.4)
@@ -661,7 +661,6 @@
       mousePos = getCanvasCoords(e.clientX, e.clientY);
     });
 
-    // Direct UI click/tap handling so menu buttons trigger reliably on all devices
     function handleMenuClick(pos) {
       if (!inLobby) return;
       const cx = V_WIDTH / 2;
@@ -876,6 +875,7 @@
 
       try {
         if (inLobby) {
+          updateLobby();
           renderLobby();
         } else {
           updateGame(dt);
@@ -938,15 +938,17 @@
       if (myShip.alive && myShip.has_autopilot && myShip.autopilot_active) {
         if (myShip.mana > 0) {
           myShip.mana = Math.max(0.0, myShip.mana - 14 * dt);
-          let closestDist = Infinity;
+          let closestDistSq = Infinity;
           let targetPos = null;
 
           for (const pid in remoteShips) {
             const p = remoteShips[pid];
             if (!p || !p.alive || p.hp <= 0) continue;
-            const d = Math.hypot(p.world_x - myShip.world_x, p.world_y - myShip.world_y);
-            if (d < closestDist) {
-              closestDist = d;
+            const dx = p.world_x - myShip.world_x;
+            const dy = p.world_y - myShip.world_y;
+            const dSq = dx * dx + dy * dy;
+            if (dSq < closestDistSq) {
+              closestDistSq = dSq;
               targetPos = { x: p.world_x, y: p.world_y };
             }
           }
@@ -1034,13 +1036,15 @@
           myShip.vy = -Math.abs(myShip.vy) * 0.8;
         }
 
-        for (const a of asteroids) {
+        for (let i = 0; i < asteroids.length; i++) {
+          const a = asteroids[i];
           const dx = myShip.world_x - a.x;
           const dy = myShip.world_y - a.y;
-          const dist = Math.hypot(dx, dy);
+          const distSq = dx * dx + dy * dy;
           const minDist = a.r + SHIP_SIZE - 2;
 
-          if (dist < minDist && dist > 0) {
+          if (distSq < minDist * minDist && distSq > 0.001) {
+            const dist = Math.sqrt(distSq);
             const nx = dx / dist;
             const ny = dy / dist;
             const overlap = minDist - dist;
@@ -1053,31 +1057,30 @@
         }
       }
 
-      // Asteroid-to-asteroid 2D elastic collisions
+      // High-performance asteroid-to-asteroid elastic collisions using squared distance
       for (let i = 0; i < asteroids.length; i++) {
         const a1 = asteroids[i];
         for (let j = i + 1; j < asteroids.length; j++) {
           const a2 = asteroids[j];
           const dx = a2.x - a1.x;
           const dy = a2.y - a1.y;
-          const dist = Math.hypot(dx, dy);
+          const distSq = dx * dx + dy * dy;
           const minDist = a1.r + a2.r;
 
-          if (dist < minDist && dist > 0.01) {
+          if (distSq < minDist * minDist && distSq > 0.001) {
+            const dist = Math.sqrt(distSq);
             const nx = dx / dist;
             const ny = dy / dist;
             const overlap = (minDist - dist) * 0.5;
 
-            // Separate overlapping asteroids
             a1.x -= nx * overlap;
             a1.y -= ny * overlap;
             a2.x += nx * overlap;
             a2.y += ny * overlap;
 
-            // Elastic impulse
             const kx = a1.vx - a2.vx;
             const ky = a1.vy - a2.vy;
-            const p = 2 * (nx * kx + ny * ky) / 2;
+            const p = nx * kx + ny * ky;
 
             a1.vx -= p * nx;
             a1.vy -= p * ny;
@@ -1096,20 +1099,20 @@
 
         if (l.is_missile) {
           let target = null;
-          let minD = 900;
+          let minDSq = 810000; // 900^2
           if (Number(l.owner) === myId) {
             for (const pid in remoteShips) {
               const p = remoteShips[pid];
               if (!p || !p.alive || p.hp <= 0) continue;
-              const d = Math.hypot(p.world_x - l.x, p.world_y - l.y);
-              if (d < minD) {
-                minD = d;
+              const dSq = (p.world_x - l.x) * (p.world_x - l.x) + (p.world_y - l.y) * (p.world_y - l.y);
+              if (dSq < minDSq) {
+                minDSq = dSq;
                 target = p;
               }
             }
           } else if (myShip.alive && myShip.hp > 0) {
-            const d = Math.hypot(myShip.world_x - l.x, myShip.world_y - l.y);
-            if (d < minD) {
+            const dSq = (myShip.world_x - l.x) * (myShip.world_x - l.x) + (myShip.world_y - l.y) * (myShip.world_y - l.y);
+            if (dSq < minDSq) {
               target = myShip;
             }
           }
@@ -1126,10 +1129,11 @@
         l.x += spd * Math.cos(r);
         l.y -= spd * Math.sin(r);
 
+        const distFromShipSq = (l.x - myShip.world_x) * (l.x - myShip.world_x) + (l.y - myShip.world_y) * (l.y - myShip.world_y);
         if (
           Math.abs(l.x) > WORLD_BOUND ||
           Math.abs(l.y) > WORLD_BOUND ||
-          Math.hypot(l.x - myShip.world_x, l.y - myShip.world_y) > 1700
+          distFromShipSq > 2890000 // 1700^2
         ) {
           lasers.splice(i, 1);
           continue;
@@ -1139,7 +1143,8 @@
         const dmg = l.dmg || 1;
         for (let j = 0; j < asteroids.length; j++) {
           const a = asteroids[j];
-          if (Math.hypot(l.x - a.x, l.y - a.y) < a.r) {
+          const dAstSq = (l.x - a.x) * (l.x - a.x) + (l.y - a.y) * (l.y - a.y);
+          if (dAstSq < a.r * a.r) {
             a.hp -= dmg;
             hitAst = true;
             if (a.hp <= 0) {
@@ -1166,7 +1171,8 @@
           for (const pid in remoteShips) {
             const p = remoteShips[pid];
             if (!p || !p.alive || p.hp <= 0) continue;
-            if (Math.hypot(l.x - p.world_x, l.y - p.world_y) < SHIP_SIZE + 6) {
+            const pDSq = (l.x - p.world_x) * (l.x - p.world_x) + (l.y - p.world_y) * (l.y - p.world_y);
+            if (pDSq < (SHIP_SIZE + 6) * (SHIP_SIZE + 6)) {
               pendingHitTarget = Number(p.id);
               pendingHitDmg = l.dmg || 1;
               lasers.splice(i, 1);
@@ -1178,7 +1184,8 @@
         }
       }
 
-      for (const a of asteroids) {
+      for (let i = 0; i < asteroids.length; i++) {
+        const a = asteroids[i];
         a.x += a.vx;
         a.y += a.vy;
         if (a.x < -WORLD_BOUND + a.r || a.x > WORLD_BOUND - a.r) a.vx *= -1;
@@ -1187,14 +1194,18 @@
 
       // Collect ores and gain XP & Mana
       if (myShip.alive) {
+        const magRangeSq = myShip.magnet_range * myShip.magnet_range;
         for (let i = ores.length - 1; i >= 0; i--) {
           const o = ores[i];
-          const d = Math.hypot(o.x - myShip.world_x, o.y - myShip.world_y);
-          if (d < myShip.magnet_range) {
+          const dx = o.x - myShip.world_x;
+          const dy = o.y - myShip.world_y;
+          const dSq = dx * dx + dy * dy;
+
+          if (dSq < magRangeSq) {
             o.x += (myShip.world_x - o.x) * myShip.orb_accel;
             o.y += (myShip.world_y - o.y) * myShip.orb_accel;
           }
-          if (d < 24) {
+          if (dSq < 576) { // 24^2
             ores.splice(i, 1);
             myShip.mana = Math.min(myShip.max_mana, myShip.mana + 20.0 * myShip.mana_mult);
             myShip.xp += Math.floor(25 * myShip.xp_mult);
@@ -1208,7 +1219,7 @@
         if (oreRegenAccumulator >= ORE_REGEN_INTERVAL) {
           oreRegenAccumulator = 0;
           if (ores.length < MAX_WORLD_ORES) {
-            const numSpawn = Math.min(6, MAX_WORLD_ORES - ores.length);
+            const numSpawn = Math.min(4, MAX_WORLD_ORES - ores.length);
             for (let k = 0; k < numSpawn; k++) {
               ores.push({
                 x: -WORLD_BOUND * 0.8 + Math.random() * (WORLD_BOUND * 1.6),
@@ -1219,7 +1230,7 @@
         }
       }
 
-      // Throttled network updates (20Hz)
+      // Throttled network packet updates (20Hz)
       netAccumulator += dt;
       worldSyncAccumulator += dt;
 
@@ -1343,7 +1354,6 @@
 
         vctx.font = "12px Consolas";
         vctx.fillStyle = WHITE;
-        vctx.textAlign = "left";
         vctx.fillText("4-Letter Code:", cx - 140, 240);
         drawCard(vctx, cx - 140, 245, 280, 34, activeInput === "code" ? RAINBOW[3] : GRAY);
 
@@ -1414,7 +1424,8 @@
       vctx.lineWidth = 2;
       vctx.strokeRect(bLeft - 4, bTop - 4, bRight - bLeft + 8, bBottom - bTop + 8);
 
-      for (const a of asteroids) {
+      for (let i = 0; i < asteroids.length; i++) {
+        const a = asteroids[i];
         const ax = a.x - camX + cx;
         const ay = a.y - camY + cy;
 
@@ -1452,7 +1463,8 @@
       }
 
       const pulse = Math.floor((performance.now() / 150) % 3);
-      for (const o of ores) {
+      for (let i = 0; i < ores.length; i++) {
+        const o = ores[i];
         const ox = o.x - camX + cx;
         const oy = o.y - camY + cy;
 
@@ -1475,7 +1487,8 @@
         }
       }
 
-      for (const l of lasers) {
+      for (let i = 0; i < lasers.length; i++) {
+        const l = lasers[i];
         if (!l) continue;
         const lx = l.x - camX + cx;
         const ly = l.y - camY + cy;
@@ -1593,7 +1606,6 @@
       vctx.fillStyle = RAINBOW[3];
       vctx.fillText(`TIER ${myShip.tier}/5  XP: ${myShip.xp}/${nextReq}`, V_WIDTH - 150, 52);
 
-      // Upgrade choice card is strictly wiped upon death and only visible when alive
       if (myShip.alive && myShip.hp > 0) {
         const currentNode = myShip.current_node;
         const options = UPGRADE_TREE[currentNode]?.children || [];
