@@ -859,7 +859,7 @@
           angle: angDeg,
           owner: myId,
           dmg: myShip.shot_damage,
-          pierce: false,
+          pierce: Boolean(myShip.piercing),
           speed: myShip.laser_speed,
           is_missile: isMissileProj
         };
@@ -1031,28 +1031,29 @@
 
         let hitAst = false;
         const dmg = l.dmg || 1;
-        for (const a of asteroids) {
+        for (let j = 0; j < asteroids.length; j++) {
+          const a = asteroids[j];
           if (Math.hypot(l.x - a.x, l.y - a.y) < a.r) {
             a.hp -= dmg;
             hitAst = true;
             if (a.hp <= 0) {
               if (a.is_ore) {
                 spawnOreCluster(a.x, a.y, 4 + Math.floor(Math.random() * 4));
-              } else if (Math.random() < 0.125) {
+              } else if (Math.random() < 0.25) {
                 spawnOreCluster(a.x, a.y, 2 + Math.floor(Math.random() * 3));
               }
 
-              if (myId === 1) {
-                Object.assign(a, createAsteroid(a.id));
-              }
+              Object.assign(a, createAsteroid(a.id));
             }
             break;
           }
         }
 
         if (hitAst) {
-          lasers.splice(i, 1);
-          continue;
+          if (!l.pierce) {
+            lasers.splice(i, 1);
+            continue;
+          }
         }
 
         if (Number(l.owner) !== myId) {
