@@ -384,7 +384,7 @@
     let inLobby = true;
 
     function connectWs() {
-      if (ws && ws.readyState === WebSocket.OPEN) return true;
+      if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return true;
       try {
         ws = new WebSocket(RENDER_URL);
         statusMessage = "Connecting to Render...";
@@ -396,8 +396,10 @@
         };
 
         ws.onmessage = (event) => {
-          const msg = JSON.parse(event.data);
-          handleNetworkMessage(msg);
+          try {
+            const msg = JSON.parse(event.data);
+            handleNetworkMessage(msg);
+          } catch(e) {}
         };
 
         ws.onerror = () => {
@@ -431,8 +433,8 @@
         if (action === "player_joined" || (menuMode === "waiting" && action === "player_joined")) {
           inLobby = false;
         } else if (status === "ok") {
-          myId = msg.player_id || 1;
-          roomCode = msg.room_code || "";
+          if (msg.player_id !== undefined) myId = Number(msg.player_id);
+          if (msg.room_code !== undefined) roomCode = msg.room_code;
           initMyShip();
 
           if (msg.rooms !== undefined) {
@@ -455,24 +457,38 @@
           statusColor = RAINBOW[1];
           menuMode = "main";
         }
-      } else {
-        if (action === "game_packet") {
-          const payload = msg.payload;
-          const pShip = payload.ship;
-          remoteShips[pShip.id] = pShip;
+      }
 
-          if (myId !== 1) {
-            if (payload.asteroids) asteroids = payload.asteroids;
-            if (payload.ores) ores = payload.ores;
+      if (action === "game_packet") {
+        inLobby = false;
+        const payload = msg.payload;
+        if (!payload) return;
+
+        if (payload.ship && payload.ship.id !== undefined) {
+          const sId = Number(payload.ship.id);
+          if (sId !== myId) {
+            remoteShips[sId] = payload.ship;
           }
-          if (payload.new_lasers) {
-            for (const rL of payload.new_lasers) {
+        }
+
+        if (payload.hit_target !== undefined && Number(payload.hit_target) === myId) {
+          myShip.hp = Math.max(0, myShip.hp - (payload.dmg || 1));
+        }
+
+        if (myId !== 1) {
+          if (payload.asteroids) asteroids = payload.asteroids;
+          if (payload.ores) ores = payload.ores;
+        }
+
+        if (payload.new_lasers && Array.isArray(payload.new_lasers)) {
+          for (const rL of payload.new_lasers) {
+            if (Number(rL.owner) !== myId) {
               lasers.push(rL);
             }
           }
-        } else if (action === "player_left") {
-          delete remoteShips[msg.player_id];
         }
+      } else if (action === "player_left") {
+        delete remoteShips[Number(msg.player_id)];
       }
     }
 
@@ -800,6 +816,8 @@
 
     function updateGame(dt) {
       const newLocalLasers = [];
+      let reportedDamageTarget = null;
+      let reportedDamageAmount = 0;
 
       if (myShip.hp <= 0) {
         myShip.hp = myShip.max_hp;
@@ -843,6 +861,7 @@
 
           for (const pid in remoteShips) {
             const p = remoteShips[pid];
+            if (!p || !p.alive) continue;
             const d = Math.hypot(p.world_x - myShip.world_x, p.world_y - myShip.world_y);
             if (d < closestDist) {
               closestDist = d;
@@ -956,9 +975,10 @@
         if (l.is_missile) {
           let target = null;
           let minD = 900;
-          if (l.owner === myId) {
+          if (Number(l.owner) === myId) {
             for (const pid in remoteShips) {
               const p = remoteShips[pid];
+              if (!p || !p.alive) continue;
               const d = Math.hypot(p.world_x - l.x, p.world_y - l.y);
               if (d < minD) {
                 minD = d;
@@ -1019,12 +1039,22 @@
           continue;
         }
 
-        if (l.owner !== myId) {
-          if (Math.hypot(l.x - myShip.world_x, l.y - myShip.world_y) < SHIP_SIZE + 4) {
-            myShip.hp -= l.dmg || 1;
+        if (Number(l.owner) !== myId) {
+          if (Math.hypot(l.x - myShip.world_x, l.y - myShip.world_y) < SHIP_SIZE + 6) {
+            myShip.hp = Math.max(0, myShip.hp - (l.dmg || 1));
             if (!l.pierce) lasers.splice(i, 1);
-            if (myShip.hp <= 0) {
-              myShip.hp = 0;
+            continue;
+          }
+        } else {
+          for (const pid in remoteShips) {
+            const p = remoteShips[pid];
+            if (!p || !p.alive) continue;
+            if (Math.hypot(l.x - p.world_x, l.y - p.world_y) < SHIP_SIZE + 6) {
+              p.hp = Math.max(0, p.hp - (l.dmg || 1));
+              reportedDamageTarget = Number(p.id);
+              reportedDamageAmount = l.dmg || 1;
+              if (!l.pierce) lasers.splice(i, 1);
+              break;
             }
           }
         }
@@ -1055,6 +1085,10 @@
         ship: myShip,
         new_lasers: newLocalLasers
       };
+      if (reportedDamageTarget !== null) {
+        outPayload.hit_target = reportedDamageTarget;
+        outPayload.dmg = reportedDamageAmount;
+      }
       if (myId === 1) {
         outPayload.asteroids = asteroids;
         outPayload.ores = ores;
@@ -1132,6 +1166,7 @@
 
         vctx.font = "12px Consolas";
         vctx.fillStyle = WHITE;
+        vctx.textAlign = "left";
         vctx.fillText("4-Letter Code:", cx - 140, 240);
         drawCard(vctx, cx - 140, 245, 280, 34, activeInput === "code" ? RAINBOW[3] : GRAY);
 
@@ -1267,7 +1302,7 @@
         const lx = l.x - camX + cx;
         const ly = l.y - camY + cy;
         const rad = (l.angle * Math.PI) / 180;
-        const lColor = RAINBOW[l.owner] || "rgb(255, 50, 50)";
+        const lColor = RAINBOW[Number(l.owner)] || "rgb(255, 50, 50)";
 
         if (l.is_missile) {
           vctx.fillStyle = lColor;
@@ -1296,10 +1331,10 @@
 
       for (const pid in remoteShips) {
         const p = remoteShips[pid];
-        if (!p.alive) continue;
+        if (!p || !p.alive) continue;
         const ox = p.world_x - camX + cx;
         const oy = p.world_y - camY + cy;
-        const rCol = RAINBOW[p.id] || RAINBOW[2];
+        const rCol = RAINBOW[Number(p.id)] || RAINBOW[2];
 
         if (ox >= 0 && ox <= V_WIDTH && oy >= 0 && oy <= V_HEIGHT) {
           const pts = getRotatedPoints(ox, oy, p.angle, SHIP_SIZE);
@@ -1309,7 +1344,7 @@
 
           vctx.fillStyle = "rgb(255, 50, 50)";
           vctx.fillRect(ox - 17, oy - 28, 34, 5);
-          const pct = Math.max(0.0, p.hp / p.max_hp);
+          const pct = Math.max(0.0, p.hp / (p.max_hp || 6));
           vctx.fillStyle = RAINBOW[4];
           vctx.fillRect(ox - 17, oy - 28, Math.floor(34 * pct), 5);
         } else {
