@@ -472,7 +472,14 @@
         }
 
         if (payload.hit_target !== undefined && Number(payload.hit_target) === myId) {
-          myShip.hp = Math.max(0, myShip.hp - (payload.dmg || 1));
+          if (myShip.alive) {
+            myShip.hp = Math.max(0, myShip.hp - (payload.dmg || 1));
+            if (myShip.hp <= 0) {
+              myShip.alive = false;
+              myShip.respawn_timer = 10.0;
+              myShip.autopilot_active = false;
+            }
+          }
         }
 
         if (myId !== 1) {
@@ -514,6 +521,7 @@
         hp: 6,
         max_hp: 6,
         alive: true,
+        respawn_timer: 0,
         xp: 0,
         tier: 0,
         current_node: "root",
@@ -606,7 +614,7 @@
         }
       } else {
         if (e.code === "KeyE") {
-          if (myShip.has_autopilot && myShip.mana > 0) {
+          if (myShip.has_autopilot && myShip.mana > 0 && myShip.alive) {
             myShip.autopilot_active = !myShip.autopilot_active;
           } else {
             myShip.autopilot_active = false;
@@ -667,7 +675,7 @@
     if (autoBtn) {
       autoBtn.addEventListener("touchstart", (e) => {
         e.preventDefault();
-        if (myShip && myShip.has_autopilot && myShip.mana > 0) {
+        if (myShip && myShip.has_autopilot && myShip.mana > 0 && myShip.alive) {
           myShip.autopilot_active = !myShip.autopilot_active;
         }
       });
@@ -819,14 +827,19 @@
       let reportedDamageTarget = null;
       let reportedDamageAmount = 0;
 
-      if (myShip.hp <= 0) {
-        myShip.hp = myShip.max_hp;
-        myShip.world_x = -WORLD_BOUND * 0.5 + Math.random() * WORLD_BOUND;
-        myShip.world_y = -WORLD_BOUND * 0.5 + Math.random() * WORLD_BOUND;
-        myShip.vx = 0.0;
-        myShip.vy = 0.0;
-        myShip.mana = Math.max(0.0, myShip.mana - 30.0);
-        myShip.autopilot_active = false;
+      if (!myShip.alive) {
+        myShip.respawn_timer -= dt;
+        myShip.vx = 0;
+        myShip.vy = 0;
+        if (myShip.respawn_timer <= 0) {
+          myShip.alive = true;
+          myShip.hp = myShip.max_hp;
+          myShip.world_x = -WORLD_BOUND * 0.5 + Math.random() * WORLD_BOUND;
+          myShip.world_y = -WORLD_BOUND * 0.5 + Math.random() * WORLD_BOUND;
+          myShip.vx = 0.0;
+          myShip.vy = 0.0;
+          myShip.mana = Math.max(0.0, myShip.mana - 30.0);
+        }
       }
 
       if (myShip.cooldown > 0) {
@@ -834,6 +847,7 @@
       }
 
       function emitShot(angDeg, offsetFwd, offsetSide) {
+        if (!myShip.alive) return;
         const rAng = (angDeg * Math.PI) / 180;
         const perp = rAng + Math.PI / 2;
         const lx = myShip.world_x + offsetFwd * Math.cos(rAng) + offsetSide * Math.cos(perp);
@@ -845,7 +859,7 @@
           angle: angDeg,
           owner: myId,
           dmg: myShip.shot_damage,
-          pierce: myShip.piercing,
+          pierce: false,
           speed: myShip.laser_speed,
           is_missile: isMissileProj
         };
@@ -853,7 +867,7 @@
         newLocalLasers.push(l);
       }
 
-      if (myShip.has_autopilot && myShip.autopilot_active) {
+      if (myShip.alive && myShip.has_autopilot && myShip.autopilot_active) {
         if (myShip.mana > 0) {
           myShip.mana = Math.max(0.0, myShip.mana - 14 * dt);
           let closestDist = Infinity;
@@ -891,7 +905,7 @@
         }
       }
 
-      if (!myShip.autopilot_active) {
+      if (myShip.alive && !myShip.autopilot_active) {
         let turn = 0;
         if (keysDown["KeyA"] || keysDown["ArrowLeft"]) turn += 1;
         if (keysDown["KeyD"] || keysDown["ArrowRight"]) turn -= 1;
@@ -929,43 +943,45 @@
         }
       }
 
-      myShip.vx *= 0.96;
-      myShip.vy *= 0.96;
-      myShip.world_x += myShip.vx;
-      myShip.world_y += myShip.vy;
+      if (myShip.alive) {
+        myShip.vx *= 0.96;
+        myShip.vy *= 0.96;
+        myShip.world_x += myShip.vx;
+        myShip.world_y += myShip.vy;
 
-      const margin = SHIP_SIZE + 4;
-      if (myShip.world_x < -WORLD_BOUND + margin) {
-        myShip.world_x = -WORLD_BOUND + margin;
-        myShip.vx = Math.abs(myShip.vx) * 0.8;
-      } else if (myShip.world_x > WORLD_BOUND - margin) {
-        myShip.world_x = WORLD_BOUND - margin;
-        myShip.vx = -Math.abs(myShip.vx) * 0.8;
-      }
+        const margin = SHIP_SIZE + 4;
+        if (myShip.world_x < -WORLD_BOUND + margin) {
+          myShip.world_x = -WORLD_BOUND + margin;
+          myShip.vx = Math.abs(myShip.vx) * 0.8;
+        } else if (myShip.world_x > WORLD_BOUND - margin) {
+          myShip.world_x = WORLD_BOUND - margin;
+          myShip.vx = -Math.abs(myShip.vx) * 0.8;
+        }
 
-      if (myShip.world_y < -WORLD_BOUND + margin) {
-        myShip.world_y = -WORLD_BOUND + margin;
-        myShip.vy = Math.abs(myShip.vy) * 0.8;
-      } else if (myShip.world_y > WORLD_BOUND - margin) {
-        myShip.world_y = WORLD_BOUND - margin;
-        myShip.vy = -Math.abs(myShip.vy) * 0.8;
-      }
+        if (myShip.world_y < -WORLD_BOUND + margin) {
+          myShip.world_y = -WORLD_BOUND + margin;
+          myShip.vy = Math.abs(myShip.vy) * 0.8;
+        } else if (myShip.world_y > WORLD_BOUND - margin) {
+          myShip.world_y = WORLD_BOUND - margin;
+          myShip.vy = -Math.abs(myShip.vy) * 0.8;
+        }
 
-      for (const a of asteroids) {
-        const dx = myShip.world_x - a.x;
-        const dy = myShip.world_y - a.y;
-        const dist = Math.hypot(dx, dy);
-        const minDist = a.r + SHIP_SIZE - 2;
+        for (const a of asteroids) {
+          const dx = myShip.world_x - a.x;
+          const dy = myShip.world_y - a.y;
+          const dist = Math.hypot(dx, dy);
+          const minDist = a.r + SHIP_SIZE - 2;
 
-        if (dist < minDist && dist > 0) {
-          const nx = dx / dist;
-          const ny = dy / dist;
-          const overlap = minDist - dist;
-          myShip.world_x += nx * overlap;
-          myShip.world_y += ny * overlap;
-          const bounce = 3.5 * myShip.ram_power;
-          myShip.vx = nx * bounce;
-          myShip.vy = ny * bounce;
+          if (dist < minDist && dist > 0) {
+            const nx = dx / dist;
+            const ny = dy / dist;
+            const overlap = minDist - dist;
+            myShip.world_x += nx * overlap;
+            myShip.world_y += ny * overlap;
+            const bounce = 3.5 * myShip.ram_power;
+            myShip.vx = nx * bounce;
+            myShip.vy = ny * bounce;
+          }
         }
       }
 
@@ -985,7 +1001,7 @@
                 target = p;
               }
             }
-          } else {
+          } else if (myShip.alive) {
             const d = Math.hypot(myShip.world_x - l.x, myShip.world_y - l.y);
             if (d < minD) {
               target = myShip;
@@ -1035,17 +1051,23 @@
         }
 
         if (hitAst) {
-          if (!l.pierce) lasers.splice(i, 1);
+          lasers.splice(i, 1);
           continue;
         }
 
         if (Number(l.owner) !== myId) {
-          if (Math.hypot(l.x - myShip.world_x, l.y - myShip.world_y) < SHIP_SIZE + 6) {
+          if (myShip.alive && Math.hypot(l.x - myShip.world_x, l.y - myShip.world_y) < SHIP_SIZE + 6) {
             myShip.hp = Math.max(0, myShip.hp - (l.dmg || 1));
-            if (!l.pierce) lasers.splice(i, 1);
+            lasers.splice(i, 1);
+            if (myShip.hp <= 0) {
+              myShip.alive = false;
+              myShip.respawn_timer = 10.0;
+              myShip.autopilot_active = false;
+            }
             continue;
           }
         } else {
+          let hitPlayer = false;
           for (const pid in remoteShips) {
             const p = remoteShips[pid];
             if (!p || !p.alive) continue;
@@ -1053,10 +1075,12 @@
               p.hp = Math.max(0, p.hp - (l.dmg || 1));
               reportedDamageTarget = Number(p.id);
               reportedDamageAmount = l.dmg || 1;
-              if (!l.pierce) lasers.splice(i, 1);
+              lasers.splice(i, 1);
+              hitPlayer = true;
               break;
             }
           }
+          if (hitPlayer) continue;
         }
       }
 
@@ -1067,17 +1091,19 @@
         if (a.y < -WORLD_BOUND + a.r || a.y > WORLD_BOUND - a.r) a.vy *= -1;
       }
 
-      for (let i = ores.length - 1; i >= 0; i--) {
-        const o = ores[i];
-        const d = Math.hypot(o.x - myShip.world_x, o.y - myShip.world_y);
-        if (d < myShip.magnet_range) {
-          o.x += (myShip.world_x - o.x) * myShip.orb_accel;
-          o.y += (myShip.world_y - o.y) * myShip.orb_accel;
-        }
-        if (d < 24) {
-          ores.splice(i, 1);
-          myShip.mana = Math.min(myShip.max_mana, myShip.mana + 20.0 * myShip.mana_mult);
-          myShip.xp += Math.floor(25 * myShip.xp_mult);
+      if (myShip.alive) {
+        for (let i = ores.length - 1; i >= 0; i--) {
+          const o = ores[i];
+          const d = Math.hypot(o.x - myShip.world_x, o.y - myShip.world_y);
+          if (d < myShip.magnet_range) {
+            o.x += (myShip.world_x - o.x) * myShip.orb_accel;
+            o.y += (myShip.world_y - o.y) * myShip.orb_accel;
+          }
+          if (d < 24) {
+            ores.splice(i, 1);
+            myShip.mana = Math.min(myShip.max_mana, myShip.mana + 20.0 * myShip.mana_mult);
+            myShip.xp += Math.floor(25 * myShip.xp_mult);
+          }
         }
       }
 
@@ -1352,24 +1378,34 @@
         }
       }
 
-      const pts = getRotatedPoints(cx, cy, myShip.angle, SHIP_SIZE);
-      vctx.strokeStyle = myShip.color;
-      vctx.lineWidth = 3;
-      drawPolygon(vctx, pts, false, true);
+      if (myShip.alive) {
+        const pts = getRotatedPoints(cx, cy, myShip.angle, SHIP_SIZE);
+        vctx.strokeStyle = myShip.color;
+        vctx.lineWidth = 3;
+        drawPolygon(vctx, pts, false, true);
 
-      if (myShip.autopilot_active) {
-        vctx.strokeStyle = CYAN;
-        vctx.lineWidth = 1;
-        vctx.beginPath();
-        vctx.arc(cx, cy, SHIP_SIZE + 6, 0, Math.PI * 2);
-        vctx.stroke();
+        if (myShip.autopilot_active) {
+          vctx.strokeStyle = CYAN;
+          vctx.lineWidth = 1;
+          vctx.beginPath();
+          vctx.arc(cx, cy, SHIP_SIZE + 6, 0, Math.PI * 2);
+          vctx.stroke();
+        }
+
+        vctx.fillStyle = "rgb(255, 50, 50)";
+        vctx.fillRect(cx - 17, cy - 28, 34, 5);
+        const hpPct = Math.max(0.0, myShip.hp / myShip.max_hp);
+        vctx.fillStyle = RAINBOW[4];
+        vctx.fillRect(cx - 17, cy - 28, Math.floor(34 * hpPct), 5);
+      } else {
+        vctx.font = "bold 28px Consolas";
+        vctx.fillStyle = RAINBOW[1];
+        vctx.textAlign = "center";
+        vctx.fillText("HULL DESTROYED", cx, cy - 15);
+        vctx.font = "18px Consolas";
+        vctx.fillStyle = WHITE;
+        vctx.fillText(`RESPAWNING IN ${Math.ceil(myShip.respawn_timer)}s`, cx, cy + 20);
       }
-
-      vctx.fillStyle = "rgb(255, 50, 50)";
-      vctx.fillRect(cx - 17, cy - 28, 34, 5);
-      const hpPct = Math.max(0.0, myShip.hp / myShip.max_hp);
-      vctx.fillStyle = RAINBOW[4];
-      vctx.fillRect(cx - 17, cy - 28, Math.floor(34 * hpPct), 5);
 
       const bm = 20;
       const by = 18;
