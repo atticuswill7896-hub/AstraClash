@@ -27,6 +27,7 @@
     #gameCanvas {
       background-color: rgb(10, 10, 25);
       image-rendering: pixelated;
+      cursor: pointer;
     }
     .touch-ui {
       position: fixed;
@@ -95,10 +96,12 @@
 
   <script>
     const isTouchDevice = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0) || window.matchMedia("(pointer: coarse)").matches;
-    if (isTouchDevice) {
-      document.getElementById("group-dpad").style.display = "grid";
-      document.getElementById("group-action").style.display = "flex";
-      document.getElementById("group-upgrade").style.display = "flex";
+    
+    function updateTouchUIVisibility() {
+      const showTouch = isTouchDevice && !inLobby;
+      document.getElementById("group-dpad").style.display = showTouch ? "grid" : "none";
+      document.getElementById("group-action").style.display = showTouch ? "flex" : "none";
+      document.getElementById("group-upgrade").style.display = showTouch ? "flex" : "none";
     }
 
     const V_WIDTH = 1000;
@@ -123,11 +126,11 @@
     window.addEventListener("resize", resizeWindow);
     resizeWindow();
 
-    function getCanvasMousePos(e) {
+    function getCanvasCoords(clientX, clientY) {
       const rect = canvas.getBoundingClientRect();
       return {
-        x: (e.clientX - rect.left) / canvasScale,
-        y: (e.clientY - rect.top) / canvasScale
+        x: (clientX - rect.left) / canvasScale,
+        y: (clientY - rect.top) / canvasScale
       };
     }
 
@@ -383,6 +386,11 @@
     let roomCode = "";
     let inLobby = true;
 
+    function setLobbyState(val) {
+      inLobby = val;
+      updateTouchUIVisibility();
+    }
+
     function connectWs() {
       if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return true;
       try {
@@ -430,7 +438,7 @@
       const status = msg.status;
 
       if (action === "player_joined") {
-        inLobby = false;
+        setLobbyState(false);
       }
 
       if (status === "ok") {
@@ -445,7 +453,7 @@
           if (rooms.length > 0) {
             sendMsg({ action: "join_room", room_code: rooms[0], password: null });
             statusMessage = "Joining public arena...";
-            inLobby = false;
+            setLobbyState(false);
           } else {
             sendMsg({ action: "create_room", public: true, password: null });
             statusMessage = "Created public room. Waiting for pilots...";
@@ -461,7 +469,7 @@
       }
 
       if (action === "game_packet") {
-        inLobby = false;
+        setLobbyState(false);
         const payload = msg.payload;
         if (!payload) return;
 
@@ -525,9 +533,9 @@
     let netAccumulator = 0;
     const NET_TICK_RATE = 0.05; // 20 Hz tick
     let worldSyncAccumulator = 0;
-    const WORLD_SYNC_RATE = 0.5; // Host broadcasts world objects twice per second
+    const WORLD_SYNC_RATE = 0.5; // Host syncs world objects at 2Hz
     let oreRegenAccumulator = 0;
-    const ORE_REGEN_INTERVAL = 4.0; // Regenerate ores every 4s if below max
+    const ORE_REGEN_INTERVAL = 4.0; // Regenerate ores every 4s
     const MAX_WORLD_ORES = 75;
 
     let outgoingLaserQueue = [];
@@ -582,7 +590,7 @@
       myShip.respawn_timer = 10.0;
       myShip.autopilot_active = false;
 
-      // Wipe all levels, pending upgrade choices, and revert stats to baseline
+      // Fully reset levels, tier progress, pending choices, and stats
       myShip.xp = 0;
       myShip.tier = 0;
       myShip.current_node = "root";
@@ -639,7 +647,6 @@
       }
     }
 
-    // Initial scatter of collectable XP ore crystals
     for (let i = 0; i < 30; i++) {
       ores.push({
         x: -WORLD_BOUND * 0.7 + Math.random() * (WORLD_BOUND * 1.4),
@@ -649,14 +656,67 @@
 
     const keysDown = {};
     let mousePos = { x: 0, y: 0 };
-    let mouseClicked = false;
 
     window.addEventListener("mousemove", (e) => {
-      mousePos = getCanvasMousePos(e);
+      mousePos = getCanvasCoords(e.clientX, e.clientY);
     });
 
-    window.addEventListener("mousedown", (e) => {
-      if (e.button === 0) mouseClicked = true;
+    // Direct UI click/tap handling so menu buttons trigger reliably on all devices
+    function handleMenuClick(pos) {
+      if (!inLobby) return;
+      const cx = V_WIDTH / 2;
+
+      if (menuMode === "main") {
+        if (pos.x >= cx - 150 && pos.x <= cx + 150 && pos.y >= 190 && pos.y <= 238) {
+          connectWs();
+          sendMsg({ action: "list_public" });
+          statusMessage = "Searching public games...";
+          statusColor = RAINBOW[3];
+        } else if (pos.x >= cx - 150 && pos.x <= cx + 150 && pos.y >= 260 && pos.y <= 308) {
+          menuMode = "host_private";
+          passwordInput = "";
+          activeInput = "pass";
+        } else if (pos.x >= cx - 150 && pos.x <= cx + 150 && pos.y >= 330 && pos.y <= 378) {
+          menuMode = "join_private";
+          roomCodeInput = "";
+          passwordInput = "";
+          activeInput = "code";
+        }
+      } else if (menuMode === "host_private") {
+        if (pos.x >= cx - 140 && pos.x <= cx - 10 && pos.y >= 340 && pos.y <= 382) {
+          connectWs();
+          sendMsg({ action: "create_room", public: false, password: passwordInput || null });
+          menuMode = "waiting";
+          statusMessage = "Creating private arena...";
+        } else if (pos.x >= cx + 10 && pos.x <= cx + 140 && pos.y >= 340 && pos.y <= 382) {
+          menuMode = "main";
+        }
+      } else if (menuMode === "join_private") {
+        if (pos.x >= cx - 140 && pos.x <= cx + 140 && pos.y >= 245 && pos.y <= 279) {
+          activeInput = "code";
+        } else if (pos.x >= cx - 140 && pos.x <= cx + 140 && pos.y >= 310 && pos.y <= 344) {
+          activeInput = "pass";
+        } else if (pos.x >= cx - 140 && pos.x <= cx - 10 && pos.y >= 365 && pos.y <= 407 && roomCodeInput.length === 4) {
+          connectWs();
+          sendMsg({ action: "join_room", room_code: roomCodeInput, password: passwordInput || null });
+          statusMessage = `Joining room [${roomCodeInput}]...`;
+          setLobbyState(false);
+        } else if (pos.x >= cx + 10 && pos.x <= cx + 140 && pos.y >= 365 && pos.y <= 407) {
+          menuMode = "main";
+        }
+      }
+    }
+
+    canvas.addEventListener("click", (e) => {
+      handleMenuClick(getCanvasCoords(e.clientX, e.clientY));
+    });
+
+    canvas.addEventListener("touchend", (e) => {
+      if (inLobby && e.changedTouches && e.changedTouches.length > 0) {
+        e.preventDefault();
+        const t = e.changedTouches[0];
+        handleMenuClick(getCanvasCoords(t.clientX, t.clientY));
+      }
     });
 
     window.addEventListener("keydown", (e) => {
@@ -687,7 +747,6 @@
           }
         }
 
-        // Only process tier selections if alive
         if (myShip && myShip.alive) {
           const currentNode = myShip.current_node;
           const options = UPGRADE_TREE[currentNode]?.children || [];
@@ -817,17 +876,14 @@
 
       try {
         if (inLobby) {
-          updateLobby();
           renderLobby();
         } else {
           updateGame(dt);
           renderGame();
         }
       } catch (err) {
-        console.error("Game loop recovery:", err);
+        console.error("Loop error recovery:", err);
       }
-
-      mouseClicked = false;
 
       ctx.fillStyle = "#000000";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -836,56 +892,6 @@
       requestAnimationFrame(gameLoop);
     }
     requestAnimationFrame(gameLoop);
-
-    function updateLobby() {
-      const cx = V_WIDTH / 2;
-
-      if (menuMode === "main") {
-        const buttons = [
-          { text: "QUICK PLAY (PUBLIC)", y: 190, action: "quick" },
-          { text: "HOST PRIVATE ROOM", y: 260, action: "host" },
-          { text: "JOIN PRIVATE ROOM", y: 330, action: "join" }
-        ];
-
-        for (const b of buttons) {
-          const hovered = mousePos.x >= cx - 150 && mousePos.x <= cx + 150 && mousePos.y >= b.y && mousePos.y <= b.y + 48;
-          drawCard(vctx, cx - 150, b.y, 300, 48, hovered ? CYAN : b.col);
-
-          vctx.font = "bold 16px Consolas";
-          vctx.fillStyle = hovered ? CYAN : b.col;
-          vctx.fillText(b.text, cx, b.y + 30);
-        }
-      } else if (menuMode === "host_private") {
-        if (mouseClicked) {
-          if (mousePos.x >= cx - 140 && mousePos.x <= cx - 10 && mousePos.y >= 340 && mousePos.y <= 382) {
-            connectWs();
-            sendMsg({ action: "create_room", public: false, password: passwordInput || null });
-            menuMode = "waiting";
-            statusMessage = "Creating private arena...";
-          }
-          if (mousePos.x >= cx + 10 && mousePos.x <= cx + 140 && mousePos.y >= 340 && mousePos.y <= 382) {
-            menuMode = "main";
-          }
-        }
-      } else if (menuMode === "join_private") {
-        if (mouseClicked) {
-          if (mousePos.x >= cx - 140 && mousePos.x <= cx + 140 && mousePos.y >= 245 && mousePos.y <= 279) {
-            activeInput = "code";
-          } else if (mousePos.x >= cx - 140 && mousePos.x <= cx + 140 && mousePos.y >= 310 && mousePos.y <= 344) {
-            activeInput = "pass";
-          }
-          if (mousePos.x >= cx - 140 && mousePos.x <= cx - 10 && mousePos.y >= 365 && mousePos.y <= 407 && roomCodeInput.length === 4) {
-            connectWs();
-            sendMsg({ action: "join_room", room_code: roomCodeInput, password: passwordInput || null });
-            statusMessage = `Joining room [${roomCodeInput}]...`;
-            inLobby = false;
-          }
-          if (mousePos.x >= cx + 10 && mousePos.x <= cx + 140 && mousePos.y >= 365 && mousePos.y <= 407) {
-            menuMode = "main";
-          }
-        }
-      }
-    }
 
     function updateGame(dt) {
       if (!myShip.alive) {
@@ -1213,7 +1219,7 @@
         }
       }
 
-      // Throttled network packet updates (20Hz)
+      // Throttled network updates (20Hz)
       netAccumulator += dt;
       worldSyncAccumulator += dt;
 
@@ -1337,6 +1343,7 @@
 
         vctx.font = "12px Consolas";
         vctx.fillStyle = WHITE;
+        vctx.textAlign = "left";
         vctx.fillText("4-Letter Code:", cx - 140, 240);
         drawCard(vctx, cx - 140, 245, 280, 34, activeInput === "code" ? RAINBOW[3] : GRAY);
 
@@ -1586,7 +1593,7 @@
       vctx.fillStyle = RAINBOW[3];
       vctx.fillText(`TIER ${myShip.tier}/5  XP: ${myShip.xp}/${nextReq}`, V_WIDTH - 150, 52);
 
-      // Upgrade choice card: only shows when alive and requirements are met
+      // Upgrade choice card is strictly wiped upon death and only visible when alive
       if (myShip.alive && myShip.hp > 0) {
         const currentNode = myShip.current_node;
         const options = UPGRADE_TREE[currentNode]?.children || [];
