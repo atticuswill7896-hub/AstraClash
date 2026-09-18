@@ -484,7 +484,6 @@
         }
 
         if (payload.hit_target !== undefined && Number(payload.hit_target) === myId) {
-          // Strictly apply damage ONLY if player is currently alive
           if (myShip && myShip.alive && myShip.hp > 0) {
             const dmgAmt = Number(payload.dmg) || 1;
             myShip.hp = Math.max(0, myShip.hp - dmgAmt);
@@ -498,8 +497,12 @@
         }
 
         if (myId !== 1) {
-          if (Array.isArray(payload.asteroids)) asteroids = payload.asteroids;
-          if (Array.isArray(payload.ores)) ores = payload.ores;
+          if (Array.isArray(payload.asteroids) && payload.asteroids.length > 0) {
+            asteroids = payload.asteroids;
+          }
+          if (Array.isArray(payload.ores)) {
+            ores = payload.ores;
+          }
         }
 
         if (payload.new_lasers && Array.isArray(payload.new_lasers)) {
@@ -521,6 +524,15 @@
     let lasers = [];
     let ores = [];
     let asteroids = [];
+
+    // Throttled network packet accumulators to stay strictly under Render CPU limits
+    let netAccumulator = 0;
+    const NET_TICK_RATE = 0.05; // 20 updates per second (20Hz)
+    let worldSyncAccumulator = 0;
+    const WORLD_SYNC_RATE = 0.5; // Host broadcasts asteroid positions twice per second
+    let outgoingLaserQueue = [];
+    let pendingHitTarget = null;
+    let pendingHitDmg = 0;
 
     function initMyShip() {
       const angleOffset = (myId - 1) * (360.0 / 6);
@@ -770,7 +782,7 @@
           renderGame();
         }
       } catch (err) {
-        console.error("Game loop recovery:", err);
+        console.error("Loop error recovery:", err);
       }
 
       mouseClicked = false;
@@ -845,11 +857,6 @@
     }
 
     function updateGame(dt) {
-      const newLocalLasers = [];
-      let reportedDamageTarget = null;
-      let reportedDamageAmount = 0;
-
-      // Handle local respawn clock
       if (!myShip.alive) {
         myShip.respawn_timer -= dt;
         myShip.vx = 0;
@@ -857,8 +864,8 @@
         if (myShip.respawn_timer <= 0) {
           myShip.alive = true;
           myShip.hp = myShip.max_hp;
-          myShip.world_x = -WORLD_BOUND * 0.4 + Math.random() * (WORLD_BOUND * 0.8);
-          myShip.world_y = -WORLD_BOUND * 0.4 + Math.random() * (WORLD_BOUND * 0.8);
+          myShip.world_x = Number((-WORLD_BOUND * 0.4 + Math.random() * (WORLD_BOUND * 0.8)).toFixed(1));
+          myShip.world_y = Number((-WORLD_BOUND * 0.4 + Math.random() * (WORLD_BOUND * 0.8)).toFixed(1));
           myShip.vx = 0.0;
           myShip.vy = 0.0;
           myShip.mana = Math.max(0.0, myShip.mana - 30.0);
@@ -874,13 +881,13 @@
         if (!myShip.alive) return;
         const rAng = (angDeg * Math.PI) / 180;
         const perp = rAng + Math.PI / 2;
-        const lx = myShip.world_x + offsetFwd * Math.cos(rAng) + offsetSide * Math.cos(perp);
-        const ly = myShip.world_y - offsetFwd * Math.sin(rAng) - offsetSide * Math.sin(perp);
+        const lx = Number((myShip.world_x + offsetFwd * Math.cos(rAng) + offsetSide * Math.cos(perp)).toFixed(1));
+        const ly = Number((myShip.world_y - offsetFwd * Math.sin(rAng) - offsetSide * Math.sin(perp)).toFixed(1));
         const isMissileProj = Boolean(myShip.is_missile);
         const l = {
           x: lx,
           y: ly,
-          angle: angDeg,
+          angle: Math.round(angDeg),
           owner: myId,
           dmg: myShip.shot_damage,
           pierce: Boolean(myShip.piercing),
@@ -888,7 +895,7 @@
           is_missile: isMissileProj
         };
         lasers.push(l);
-        newLocalLasers.push(l);
+        outgoingLaserQueue.push(l);
       }
 
       if (myShip.alive && myShip.has_autopilot && myShip.autopilot_active) {
@@ -1083,15 +1090,14 @@
           }
         }
 
-        // Only register bullet strikes against active, living players
         if (Number(l.owner) === myId) {
           let hitPlayer = false;
           for (const pid in remoteShips) {
             const p = remoteShips[pid];
             if (!p || !p.alive || p.hp <= 0) continue;
             if (Math.hypot(l.x - p.world_x, l.y - p.world_y) < SHIP_SIZE + 6) {
-              reportedDamageTarget = Number(p.id);
-              reportedDamageAmount = l.dmg || 1;
+              pendingHitTarget = Number(p.id);
+              pendingHitDmg = l.dmg || 1;
               lasers.splice(i, 1);
               hitPlayer = true;
               break;
@@ -1124,27 +1130,59 @@
         }
       }
 
-      const outPayload = {
-        ship: {
-          id: myShip.id,
-          world_x: Number(myShip.world_x.toFixed(2)),
-          world_y: Number(myShip.world_y.toFixed(2)),
-          angle: Number(myShip.angle.toFixed(2)),
-          hp: myShip.hp,
-          max_hp: myShip.max_hp,
-          alive: myShip.alive
-        },
-        new_lasers: newLocalLasers
-      };
-      if (reportedDamageTarget !== null) {
-        outPayload.hit_target = reportedDamageTarget;
-        outPayload.dmg = reportedDamageAmount;
+      // Throttled Network Update: Emits 20 times/sec instead of 60 to prevent Render CPU starvation
+      netAccumulator += dt;
+      worldSyncAccumulator += dt;
+
+      if (netAccumulator >= NET_TICK_RATE) {
+        netAccumulator = 0;
+
+        const outPayload = {
+          ship: {
+            id: myShip.id,
+            world_x: Number(myShip.world_x.toFixed(1)),
+            world_y: Number(myShip.world_y.toFixed(1)),
+            angle: Math.round(myShip.angle),
+            hp: myShip.hp,
+            max_hp: myShip.max_hp,
+            alive: myShip.alive
+          }
+        };
+
+        if (outgoingLaserQueue.length > 0) {
+          outPayload.new_lasers = outgoingLaserQueue;
+          outgoingLaserQueue = [];
+        }
+
+        if (pendingHitTarget !== null) {
+          outPayload.hit_target = pendingHitTarget;
+          outPayload.dmg = pendingHitDmg;
+          pendingHitTarget = null;
+          pendingHitDmg = 0;
+        }
+
+        // Host sends asteroids and ores at 2Hz instead of 60Hz to reduce payload size by 97%
+        if (myId === 1 && worldSyncAccumulator >= WORLD_SYNC_RATE) {
+          worldSyncAccumulator = 0;
+          outPayload.asteroids = asteroids.map(a => ({
+            id: a.id,
+            x: Math.round(a.x),
+            y: Math.round(a.y),
+            vx: Number(a.vx.toFixed(2)),
+            vy: Number(a.vy.toFixed(2)),
+            r: a.r,
+            hp: a.hp,
+            max_hp: a.max_hp,
+            is_ore: a.is_ore
+          }));
+          outPayload.ores = ores.map(o => ({
+            x: Math.round(o.x),
+            y: Math.round(o.y)
+          }));
+        }
+
+        sendMsg({ action: "game_packet", payload: outPayload });
       }
-      if (myId === 1) {
-        outPayload.asteroids = asteroids;
-        outPayload.ores = ores;
-      }
-      sendMsg({ action: "game_packet", payload: outPayload });
     }
 
     function renderLobby() {
@@ -1349,6 +1387,7 @@
       }
 
       for (const l of lasers) {
+        if (!l) continue;
         const lx = l.x - camX + cx;
         const ly = l.y - camY + cy;
         const rad = (l.angle * Math.PI) / 180;
