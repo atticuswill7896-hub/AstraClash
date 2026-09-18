@@ -468,6 +468,11 @@
           const sId = Number(payload.ship.id);
           if (sId !== myId) {
             remoteShips[sId] = payload.ship;
+            if (payload.ship.alive !== undefined) {
+              remoteShips[sId].alive = Boolean(payload.ship.alive);
+            } else if (payload.ship.hp > 0) {
+              remoteShips[sId].alive = true;
+            }
           }
         }
 
@@ -476,6 +481,7 @@
             myShip.hp = Math.max(0, myShip.hp - (payload.dmg || 1));
             if (myShip.hp <= 0) {
               myShip.alive = false;
+              myShip.hp = 0;
               myShip.respawn_timer = 10.0;
               myShip.autopilot_active = false;
             }
@@ -827,6 +833,13 @@
       let reportedDamageTarget = null;
       let reportedDamageAmount = 0;
 
+      if (myShip.alive && myShip.hp <= 0) {
+        myShip.alive = false;
+        myShip.hp = 0;
+        myShip.respawn_timer = 10.0;
+        myShip.autopilot_active = false;
+      }
+
       if (!myShip.alive) {
         myShip.respawn_timer -= dt;
         myShip.vx = 0;
@@ -839,6 +852,7 @@
           myShip.vx = 0.0;
           myShip.vy = 0.0;
           myShip.mana = Math.max(0.0, myShip.mana - 30.0);
+          myShip.respawn_timer = 0;
         }
       }
 
@@ -875,7 +889,7 @@
 
           for (const pid in remoteShips) {
             const p = remoteShips[pid];
-            if (!p || !p.alive) continue;
+            if (!p || !p.alive || p.hp <= 0) continue;
             const d = Math.hypot(p.world_x - myShip.world_x, p.world_y - myShip.world_y);
             if (d < closestDist) {
               closestDist = d;
@@ -994,14 +1008,14 @@
           if (Number(l.owner) === myId) {
             for (const pid in remoteShips) {
               const p = remoteShips[pid];
-              if (!p || !p.alive) continue;
+              if (!p || !p.alive || p.hp <= 0) continue;
               const d = Math.hypot(p.world_x - l.x, p.world_y - l.y);
               if (d < minD) {
                 minD = d;
                 target = p;
               }
             }
-          } else if (myShip.alive) {
+          } else if (myShip.alive && myShip.hp > 0) {
             const d = Math.hypot(myShip.world_x - l.x, myShip.world_y - l.y);
             if (d < minD) {
               target = myShip;
@@ -1057,11 +1071,12 @@
         }
 
         if (Number(l.owner) !== myId) {
-          if (myShip.alive && Math.hypot(l.x - myShip.world_x, l.y - myShip.world_y) < SHIP_SIZE + 6) {
+          if (myShip.alive && myShip.hp > 0 && Math.hypot(l.x - myShip.world_x, l.y - myShip.world_y) < SHIP_SIZE + 6) {
             myShip.hp = Math.max(0, myShip.hp - (l.dmg || 1));
             lasers.splice(i, 1);
             if (myShip.hp <= 0) {
               myShip.alive = false;
+              myShip.hp = 0;
               myShip.respawn_timer = 10.0;
               myShip.autopilot_active = false;
             }
@@ -1071,7 +1086,7 @@
           let hitPlayer = false;
           for (const pid in remoteShips) {
             const p = remoteShips[pid];
-            if (!p || !p.alive) continue;
+            if (!p || !p.alive || p.hp <= 0) continue;
             if (Math.hypot(l.x - p.world_x, l.y - p.world_y) < SHIP_SIZE + 6) {
               p.hp = Math.max(0, p.hp - (l.dmg || 1));
               reportedDamageTarget = Number(p.id);
@@ -1196,7 +1211,6 @@
 
         vctx.font = "12px Consolas";
         vctx.fillStyle = WHITE;
-        vctx.textAlign = "left";
         vctx.fillText("4-Letter Code:", cx - 140, 240);
         drawCard(vctx, cx - 140, 245, 280, 34, activeInput === "code" ? RAINBOW[3] : GRAY);
 
@@ -1361,7 +1375,7 @@
 
       for (const pid in remoteShips) {
         const p = remoteShips[pid];
-        if (!p || !p.alive) continue;
+        if (!p || !p.alive || p.hp <= 0) continue;
         const ox = p.world_x - camX + cx;
         const oy = p.world_y - camY + cy;
         const rCol = RAINBOW[Number(p.id)] || RAINBOW[2];
@@ -1382,7 +1396,7 @@
         }
       }
 
-      if (myShip.alive) {
+      if (myShip.alive && myShip.hp > 0) {
         const pts = getRotatedPoints(cx, cy, myShip.angle, SHIP_SIZE);
         vctx.strokeStyle = myShip.color;
         vctx.lineWidth = 3;
@@ -1408,7 +1422,7 @@
         vctx.fillText("HULL DESTROYED", cx, cy - 15);
         vctx.font = "18px Consolas";
         vctx.fillStyle = WHITE;
-        vctx.fillText(`RESPAWNING IN ${Math.ceil(myShip.respawn_timer)}s`, cx, cy + 20);
+        vctx.fillText(`RESPAWNING IN ${Math.max(1, Math.ceil(myShip.respawn_timer))}s`, cx, cy + 20);
       }
 
       const bm = 20;
