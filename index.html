@@ -429,34 +429,35 @@
       const action = msg.action;
       const status = msg.status;
 
-      if (inLobby) {
-        if (action === "player_joined" || (menuMode === "waiting" && action === "player_joined")) {
-          inLobby = false;
-        } else if (status === "ok") {
-          if (msg.player_id !== undefined) myId = Number(msg.player_id) || 1;
-          if (msg.room_code !== undefined) roomCode = msg.room_code;
-          initMyShip();
+      if (action === "player_joined") {
+        inLobby = false;
+      }
 
-          if (msg.rooms !== undefined) {
-            const rooms = msg.rooms;
-            if (rooms.length > 0) {
-              sendMsg({ action: "join_room", room_code: rooms[0], password: null });
-              statusMessage = "Joining public arena...";
-            } else {
-              sendMsg({ action: "create_room", public: true, password: null });
-              statusMessage = "Created public room. Waiting for pilots...";
-              menuMode = "waiting";
-            }
-          } else if (menuMode === "waiting") {
-            statusMessage = `Room [${roomCode}] open. Waiting for pilots (Max 6)...`;
-          } else if (myId > 1) {
-            inLobby = false;
-          }
-        } else if (status === "error") {
-          statusMessage = msg.msg || "Action failed.";
-          statusColor = RAINBOW[1];
-          menuMode = "main";
+      if (status === "ok") {
+        if (msg.player_id !== undefined) {
+          myId = Number(msg.player_id) || 1;
+          initMyShip();
         }
+        if (msg.room_code !== undefined) roomCode = msg.room_code;
+
+        if (msg.rooms !== undefined) {
+          const rooms = msg.rooms;
+          if (rooms.length > 0) {
+            sendMsg({ action: "join_room", room_code: rooms[0], password: null });
+            statusMessage = "Joining public arena...";
+            inLobby = false;
+          } else {
+            sendMsg({ action: "create_room", public: true, password: null });
+            statusMessage = "Created public room. Waiting for pilots...";
+            menuMode = "waiting";
+          }
+        } else if (menuMode === "waiting") {
+          statusMessage = `Room [${roomCode}] open. Waiting for pilots (Max 6)...`;
+        }
+      } else if (status === "error") {
+        statusMessage = msg.msg || "Action failed.";
+        statusColor = RAINBOW[1];
+        menuMode = "main";
       }
 
       if (action === "game_packet") {
@@ -476,7 +477,7 @@
                 angle: Number(s.angle) || 0,
                 hp: Number(s.hp) || 0,
                 max_hp: Number(s.max_hp) || 6,
-                alive: Boolean(s.alive)
+                alive: s.alive !== undefined ? Boolean(s.alive) : Number(s.hp) > 0
               };
             }
           }
@@ -627,9 +628,9 @@
         }
       } else {
         if (e.code === "KeyE") {
-          if (myShip.has_autopilot && myShip.mana > 0 && myShip.alive) {
+          if (myShip && myShip.has_autopilot && myShip.mana > 0 && myShip.alive) {
             myShip.autopilot_active = !myShip.autopilot_active;
-          } else {
+          } else if (myShip) {
             myShip.autopilot_active = false;
           }
         }
@@ -768,7 +769,7 @@
           renderGame();
         }
       } catch (err) {
-        console.error("Loop Error:", err);
+        console.error("Engine loop caught error:", err);
       }
 
       mouseClicked = false;
@@ -833,6 +834,7 @@
             connectWs();
             sendMsg({ action: "join_room", room_code: roomCodeInput, password: passwordInput || null });
             statusMessage = `Joining room [${roomCodeInput}]...`;
+            inLobby = false;
           }
           if (mousePos.x >= cx + 10 && mousePos.x <= cx + 140 && mousePos.y >= 365 && mousePos.y <= 407) {
             menuMode = "main";
@@ -1007,6 +1009,10 @@
 
       for (let i = lasers.length - 1; i >= 0; i--) {
         const l = lasers[i];
+        if (!l) {
+          lasers.splice(i, 1);
+          continue;
+        }
 
         if (l.is_missile) {
           let target = null;
@@ -1340,6 +1346,7 @@
       }
 
       for (const l of lasers) {
+        if (!l) continue;
         const lx = l.x - camX + cx;
         const ly = l.y - camY + cy;
         const rad = (l.angle * Math.PI) / 180;
