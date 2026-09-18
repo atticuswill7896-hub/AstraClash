@@ -125,13 +125,12 @@
 
     function getCanvasMousePos(e) {
       const rect = canvas.getBoundingClientRect();
-      const rawX = e.clientX - rect.left;
-      const rawY = e.clientY - rect.top;
       return {
-        x: rawX / canvasScale,
-        y: rawY / canvasScale
+        x: (e.clientX - rect.left) / canvasScale,
+        y: (e.clientY - rect.top) / canvasScale
       };
     }
+
     const RAINBOW = {
       1: "rgb(255, 60, 60)",
       2: "rgb(255, 140, 30)",
@@ -208,16 +207,20 @@
         name: "Hunter Torpedoes",
         desc: "Fires seeking missile torpedoes",
         children: ["hyper_homing"],
-        apply: (p) => { 
-          p.laser_speed = 12.0; 
-          p.is_missile = true; 
+        apply: (p) => {
+          p.laser_speed = 13.0;
+          p.is_missile = true;
         }
       },
       hyper_homing: {
         name: "Predator Swarm",
-        desc: "Devastating double damage",
+        desc: "Devastating double missile damage",
         children: ["autopilot"],
-        apply: (p) => { p.shot_damage = 3; }
+        apply: (p) => {
+          p.shot_damage = 3;
+          p.is_missile = true;
+          p.laser_speed = 15.0;
+        }
       },
       super_prism: {
         name: "Refraction Field",
@@ -365,6 +368,7 @@
       targetCtx.lineWidth = 2;
       targetCtx.strokeRect(x, y, w, h);
     }
+
     const RENDER_URL = "wss://astraclash-howt.onrender.com";
     let ws = null;
     let menuMode = "main";
@@ -656,6 +660,7 @@
     bindTouch("btn-1", "Digit1", true);
     bindTouch("btn-2", "Digit2", true);
     bindTouch("btn-3", "Digit3", true);
+
     function getRotatedPoints(cx, cy, angle, size) {
       const rad = (angle * Math.PI) / 180;
       const tx = cx + size * Math.cos(rad);
@@ -810,6 +815,26 @@
         myShip.cooldown -= dt;
       }
 
+      function emitShot(angDeg, offsetFwd, offsetSide) {
+        const rAng = (angDeg * Math.PI) / 180;
+        const perp = rAng + Math.PI / 2;
+        const lx = myShip.world_x + offsetFwd * Math.cos(rAng) + offsetSide * Math.cos(perp);
+        const ly = myShip.world_y - offsetFwd * Math.sin(rAng) - offsetSide * Math.sin(perp);
+        const isMissileProj = Boolean(myShip.is_missile);
+        const l = {
+          x: lx,
+          y: ly,
+          angle: angDeg,
+          owner: myId,
+          dmg: myShip.shot_damage,
+          pierce: myShip.piercing,
+          speed: myShip.laser_speed,
+          is_missile: isMissileProj
+        };
+        lasers.push(l);
+        newLocalLasers.push(l);
+      }
+
       if (myShip.has_autopilot && myShip.autopilot_active) {
         if (myShip.mana > 0) {
           myShip.mana = Math.max(0.0, myShip.mana - 14 * dt);
@@ -838,18 +863,7 @@
             myShip.vy -= thrust * Math.sin(rad);
 
             if (Math.abs(diff) < 16 && myShip.cooldown <= 0) {
-              const l = {
-                x: myShip.world_x + SHIP_SIZE * Math.cos(rad),
-                y: myShip.world_y - SHIP_SIZE * Math.sin(rad),
-                angle: myShip.angle,
-                owner: myId,
-                dmg: myShip.shot_damage,
-                pierce: myShip.piercing,
-                speed: myShip.laser_speed,
-                is_missile: myShip.is_missile || false
-              };
-              lasers.push(l);
-              newLocalLasers.push(l);
+              emitShot(myShip.angle, SHIP_SIZE, 0);
               myShip.cooldown = myShip.cooldown_max;
             }
           }
@@ -873,25 +887,6 @@
 
         if ((keysDown["Space"] || keysDown["KeyS"] || keysDown["ArrowDown"]) && myShip.cooldown <= 0) {
           const rad = (myShip.angle * Math.PI) / 180;
-
-          function emitShot(angDeg, offsetFwd, offsetSide) {
-            const rAng = (angDeg * Math.PI) / 180;
-            const perp = rAng + Math.PI / 2;
-            const lx = myShip.world_x + offsetFwd * Math.cos(rAng) + offsetSide * Math.cos(perp);
-            const ly = myShip.world_y - offsetFwd * Math.sin(rAng) - offsetSide * Math.sin(perp);
-            const l = {
-              x: lx,
-              y: ly,
-              angle: angDeg,
-              owner: myId,
-              dmg: myShip.shot_damage,
-              pierce: myShip.piercing,
-              speed: myShip.laser_speed,
-              is_missile: myShip.is_missile || false
-            };
-            lasers.push(l);
-            newLocalLasers.push(l);
-          }
 
           if (myShip.cannons === 2) {
             emitShot(myShip.angle, SHIP_SIZE, 8);
@@ -959,20 +954,28 @@
         const l = lasers[i];
 
         if (l.is_missile) {
-          let nearestTarget = null;
-          let minD = 500;
-          for (const pid in remoteShips) {
-            const p = remoteShips[pid];
-            const dist = Math.hypot(p.world_x - l.x, p.world_y - l.y);
-            if (dist < minD) {
-              minD = dist;
-              nearestTarget = p;
+          let target = null;
+          let minD = 900;
+          if (l.owner === myId) {
+            for (const pid in remoteShips) {
+              const p = remoteShips[pid];
+              const d = Math.hypot(p.world_x - l.x, p.world_y - l.y);
+              if (d < minD) {
+                minD = d;
+                target = p;
+              }
+            }
+          } else {
+            const d = Math.hypot(myShip.world_x - l.x, myShip.world_y - l.y);
+            if (d < minD) {
+              target = myShip;
             }
           }
-          if (nearestTarget) {
-            const targetAng = ((Math.atan2(-(nearestTarget.world_y - l.y), nearestTarget.world_x - l.x) * 180) / Math.PI + 360) % 360;
+
+          if (target) {
+            const targetAng = ((Math.atan2(-(target.world_y - l.y), target.world_x - l.x) * 180) / Math.PI + 360) % 360;
             const diff = ((targetAng - l.angle + 180) % 360) - 180;
-            l.angle += Math.max(-5, Math.min(5, diff));
+            l.angle += Math.max(-5.5, Math.min(5.5, diff));
           }
         }
 
@@ -984,7 +987,7 @@
         if (
           Math.abs(l.x) > WORLD_BOUND ||
           Math.abs(l.y) > WORLD_BOUND ||
-          Math.hypot(l.x - myShip.world_x, l.y - myShip.world_y) > 1600
+          Math.hypot(l.x - myShip.world_x, l.y - myShip.world_y) > 1700
         ) {
           lasers.splice(i, 1);
           continue;
@@ -1058,6 +1061,7 @@
       }
       sendMsg({ action: "game_packet", payload: outPayload });
     }
+
     function renderLobby() {
       vctx.fillStyle = BLACK;
       vctx.fillRect(0, 0, V_WIDTH, V_HEIGHT);
@@ -1128,7 +1132,6 @@
 
         vctx.font = "12px Consolas";
         vctx.fillStyle = WHITE;
-        vctx.textAlign = "left";
         vctx.fillText("4-Letter Code:", cx - 140, 240);
         drawCard(vctx, cx - 140, 245, 280, 34, activeInput === "code" ? RAINBOW[3] : GRAY);
 
@@ -1264,12 +1267,31 @@
         const lx = l.x - camX + cx;
         const ly = l.y - camY + cy;
         const rad = (l.angle * Math.PI) / 180;
-        vctx.strokeStyle = RAINBOW[l.owner] || "rgb(255, 50, 50)";
-        vctx.lineWidth = 3;
-        vctx.beginPath();
-        vctx.moveTo(lx, ly);
-        vctx.lineTo(lx + 15 * Math.cos(rad), ly - 15 * Math.sin(rad));
-        vctx.stroke();
+        const lColor = RAINBOW[l.owner] || "rgb(255, 50, 50)";
+
+        if (l.is_missile) {
+          vctx.fillStyle = lColor;
+          vctx.strokeStyle = WHITE;
+          vctx.lineWidth = 1.5;
+          vctx.beginPath();
+          vctx.arc(lx, ly, 4.5, 0, Math.PI * 2);
+          vctx.fill();
+          vctx.stroke();
+
+          vctx.strokeStyle = "rgb(255, 170, 40)";
+          vctx.lineWidth = 2;
+          vctx.beginPath();
+          vctx.moveTo(lx, ly);
+          vctx.lineTo(lx - 12 * Math.cos(rad), ly + 12 * Math.sin(rad));
+          vctx.stroke();
+        } else {
+          vctx.strokeStyle = lColor;
+          vctx.lineWidth = 3;
+          vctx.beginPath();
+          vctx.moveTo(lx, ly);
+          vctx.lineTo(lx + 15 * Math.cos(rad), ly - 15 * Math.sin(rad));
+          vctx.stroke();
+        }
       }
 
       for (const pid in remoteShips) {
