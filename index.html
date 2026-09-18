@@ -468,11 +468,6 @@
           const sId = Number(payload.ship.id);
           if (sId !== myId) {
             remoteShips[sId] = payload.ship;
-            if (payload.ship.alive !== undefined) {
-              remoteShips[sId].alive = Boolean(payload.ship.alive);
-            } else if (payload.ship.hp > 0) {
-              remoteShips[sId].alive = true;
-            }
           }
         }
 
@@ -1088,12 +1083,8 @@
             const p = remoteShips[pid];
             if (!p || !p.alive || p.hp <= 0) continue;
             if (Math.hypot(l.x - p.world_x, l.y - p.world_y) < SHIP_SIZE + 6) {
-              p.hp = Math.max(0, p.hp - (l.dmg || 1));
               reportedDamageTarget = Number(p.id);
               reportedDamageAmount = l.dmg || 1;
-              if (p.hp <= 0) {
-                p.alive = false;
-              }
               lasers.splice(i, 1);
               hitPlayer = true;
               break;
