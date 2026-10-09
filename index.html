@@ -14,10 +14,35 @@
     .upgrade-pad { top: 70px; right: 20px; display: flex; gap: 10px; }
     .t-btn { background: rgba(20, 30, 50, 0.75); border: 2px solid #00ffff; color: #fff; font-size: 16px; font-weight: bold; border-radius: 8px; display: flex; align-items: center; justify-content: center; }
     .t-btn:active { background: rgba(0, 255, 255, 0.4); }
+    /* Real input so mobile OS keyboards can open (canvas key events do not) */
+    #mobileTextInput {
+      position: fixed;
+      left: 50%;
+      bottom: 12px;
+      transform: translateX(-50%);
+      width: min(90vw, 320px);
+      height: 44px;
+      z-index: 200;
+      font-size: 16px; /* prevents iOS zoom on focus */
+      font-family: Consolas, monospace;
+      text-align: center;
+      color: #fff;
+      background: rgba(15, 18, 32, 0.95);
+      border: 2px solid #00ffff;
+      border-radius: 8px;
+      outline: none;
+      padding: 8px 12px;
+      display: none;
+      -webkit-user-select: text;
+      user-select: text;
+      touch-action: manipulation;
+    }
+    #mobileTextInput.visible { display: block; }
   </style>
 </head>
 <body>
   <canvas id="gameCanvas" width="1000" height="600"></canvas>
+  <input id="mobileTextInput" type="text" autocomplete="off" autocorrect="off" autocapitalize="characters" spellcheck="false" inputmode="text" />
 
   <div class="touch-ui d-pad" id="group-dpad">
     <div></div><div class="t-btn" id="btn-up">▲</div><div></div>
@@ -37,6 +62,94 @@
 
   <script>
     const isTouchDevice = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0) || window.matchMedia("(pointer: coarse)").matches;
+    const mobileInput = document.getElementById("mobileTextInput");
+    let mobileField = null; // 'authName' | 'authPass' | 'roomCode' | 'roomPass'
+
+    function syncMobileFieldFromInput() {
+      if (!mobileInput || !mobileField) return;
+      let v = mobileInput.value || "";
+      if (mobileField === "authName") {
+        v = v.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8);
+        authNameInput = v;
+        if (mobileInput.value !== v) mobileInput.value = v;
+      } else if (mobileField === "authPass") {
+        v = v.slice(0, 12);
+        authPassInput = v;
+      } else if (mobileField === "roomCode") {
+        v = v.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 4);
+        roomCodeInput = v;
+        if (mobileInput.value !== v) mobileInput.value = v;
+      } else if (mobileField === "roomPass") {
+        v = v.slice(0, 16);
+        passwordInput = v;
+      }
+    }
+
+    function openMobileKeyboard(field) {
+      if (!mobileInput) return;
+      mobileField = field;
+      let val = "";
+      let placeholder = "Type here";
+      let inputMode = "text";
+      let type = "text";
+      if (field === "authName") {
+        val = authNameInput;
+        placeholder = "CALLSIGN";
+        mobileInput.setAttribute("autocapitalize", "characters");
+        authActiveField = "name";
+      } else if (field === "authPass") {
+        val = authPassInput;
+        placeholder = "PASS-KEY";
+        type = "password";
+        authActiveField = "pass";
+      } else if (field === "roomCode") {
+        val = roomCodeInput;
+        placeholder = "4-LETTER CODE";
+        mobileInput.setAttribute("autocapitalize", "characters");
+        activeInput = "code";
+      } else if (field === "roomPass") {
+        val = passwordInput;
+        placeholder = "PASSWORD (optional)";
+        type = "text";
+        activeInput = "pass";
+      }
+      mobileInput.type = type === "password" ? "password" : "text";
+      mobileInput.placeholder = placeholder;
+      mobileInput.value = val;
+      mobileInput.classList.add("visible");
+      // Focus must run inside the user gesture for iOS
+      setTimeout(() => {
+        try {
+          mobileInput.focus({ preventScroll: true });
+          mobileInput.click();
+        } catch (e) {
+          try { mobileInput.focus(); } catch (e2) {}
+        }
+      }, 10);
+    }
+
+    function closeMobileKeyboard() {
+      if (!mobileInput) return;
+      syncMobileFieldFromInput();
+      mobileField = null;
+      mobileInput.blur();
+      mobileInput.classList.remove("visible");
+      mobileInput.value = "";
+    }
+
+    if (mobileInput) {
+      mobileInput.addEventListener("input", () => syncMobileFieldFromInput());
+      mobileInput.addEventListener("change", () => syncMobileFieldFromInput());
+      mobileInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          syncMobileFieldFromInput();
+          closeMobileKeyboard();
+        }
+      });
+      // Keep game vars live while typing
+      mobileInput.addEventListener("keyup", () => syncMobileFieldFromInput());
+    }
 
     function updateTouchUIVisibility() {
       const showTouch = isTouchDevice && !inLobby;
@@ -105,7 +218,7 @@
       vampire_core: { name: "Vampire Core", desc: "Hitting enemies siphons and heals HP", children: [], apply: (p) => { p.life_leech = true; } },
       tachyon_lance: { name: "Tachyon Lance", desc: "Slow but massive piercing sniper shot", children: [], apply: (p) => { p.laser_speed = 35.0; p.shot_damage = 5; p.cooldown_max = 0.85; p.piercing = true; } },
       targeting_optics: { name: "Targeting Optics", desc: "Enemy markers reveal live Health Bars", children: [], apply: (p) => { p.targeting_optics = true; } },
-      stasis_field: { name: "Stasis Forcefield", desc: "Hold E to grow and shoot a Stasis blast", children: [], apply: (p) => { p.has_stasis_field = true; } },
+      stasis_field: { name: "Stasis Forcefield", desc: "Press E to grow a field, E again to launch it", children: [], apply: (p) => { p.has_stasis_field = true; } },
       phase_dash: { name: "Phase Dash", desc: "Press ABILITY (E) to warp using 40 Mana", children: [], apply: (p) => { p.can_dash = true; } },
       proximity_mines: { name: "Proximity Mines", desc: "Automatically drop red explosive mines", children: [], apply: (p) => { p.drops_mines = true; } },
       boomerang_beams: { name: "Boomerang Beams", desc: "Lasers stop and reverse direction back to you", children: [], apply: (p) => { p.boomerang = true; } },
@@ -163,7 +276,10 @@
 
     function setLobbyState(val) { 
       inLobby = val; 
-      if (!val) menuMode = "in_game";
+      if (!val) {
+        menuMode = "in_game";
+        resetMatch();
+      }
       updateTouchUIVisibility(); 
     }
 
@@ -288,6 +404,18 @@
         const payload = msg.payload; 
         if (!payload) return;
 
+        // Host-authoritative match config / clock / end state
+        if (payload.match_config && myId !== 1) {
+          applyMatchConfig(payload.match_config);
+        }
+        if (payload.match_time !== undefined && myId !== 1) {
+          const t = Number(payload.match_time);
+          if (Number.isFinite(t)) matchTimeLeft = t;
+        }
+        if (payload.match_over && !matchOver) {
+          finishMatch(payload.match_reason || "Match complete.");
+        }
+
         if (payload.ship && payload.ship.id !== undefined) {
           const sId = Number(payload.ship.id);
           if (sId !== myId) {
@@ -321,6 +449,7 @@
                 max_hp: incomingMax,
                 alive: incomingAlive, 
                 xp: Number.isFinite(Number(s.xp)) ? Number(s.xp) : 0, 
+                kills: Number.isFinite(Number(s.kills)) ? Number(s.kills) : (prev && prev.kills) || 0, 
                 stasis: Boolean(s.stasis), 
                 name: s.name || `PILOT ${sId}`
               };
@@ -494,6 +623,131 @@
     connectWs();
 
     let myShip = null; const remoteShips = {}; let lasers = []; let ores = []; let asteroids = [];
+    // Default public match settings (private host can override)
+    const MATCH_TIME_MAX_SEC = 20 * 60;
+    let matchConfig = {
+      mode: "ffa",       // ffa | teams_3v3 | teams_2v2v2
+      useTimer: true,
+      useKills: true,
+      durationSec: 8 * 60,
+      killLimit: 10      // 0 = unlimited
+    };
+    let matchTimeLeft = matchConfig.durationSec;
+    let matchOver = false;
+    let matchResults = null;
+    let matchWinnerName = "";
+
+    const TEAM_COLORS = {
+      0: "rgb(50, 180, 255)",
+      1: "rgb(255, 80, 80)",
+      2: "rgb(80, 255, 120)"
+    };
+    const TEAM_NAMES = { 0: "ALPHA", 1: "BRAVO", 2: "CHARLIE" };
+
+    function getTeam(playerId) {
+      const id = Number(playerId) || 1;
+      if (matchConfig.mode === "teams_3v3") return id <= 3 ? 0 : 1;
+      if (matchConfig.mode === "teams_2v2v2") return Math.floor((id - 1) / 2);
+      return -1; // FFA — no team
+    }
+
+    function sameTeam(a, b) {
+      if (matchConfig.mode === "ffa") return Number(a) === Number(b);
+      return getTeam(a) === getTeam(b);
+    }
+
+    function isTeamMode() {
+      return matchConfig.mode === "teams_3v3" || matchConfig.mode === "teams_2v2v2";
+    }
+
+    function clampMatchConfig(cfg) {
+      const c = Object.assign({}, matchConfig, cfg || {});
+      c.mode = ["ffa", "teams_3v3", "teams_2v2v2"].includes(c.mode) ? c.mode : "ffa";
+      c.useTimer = Boolean(c.useTimer);
+      c.useKills = Boolean(c.useKills);
+      if (!c.useTimer && !c.useKills) c.useTimer = true; // must end somehow
+      c.durationSec = Math.max(60, Math.min(MATCH_TIME_MAX_SEC, Number(c.durationSec) || 480));
+      let kl = Number(c.killLimit);
+      if (!Number.isFinite(kl) || kl < 0) kl = 0;
+      c.killLimit = Math.floor(kl); // 0 = unlimited
+      return c;
+    }
+
+    function applyMatchConfig(cfg) {
+      matchConfig = clampMatchConfig(cfg);
+      matchTimeLeft = matchConfig.useTimer ? matchConfig.durationSec : 999999;
+    }
+
+    function resetMatch() {
+      matchConfig = clampMatchConfig(matchConfig);
+      matchTimeLeft = matchConfig.useTimer ? matchConfig.durationSec : 999999;
+      matchOver = false;
+      matchResults = null;
+      matchWinnerName = "";
+      if (myShip) myShip.kills = 0;
+      for (const pid in remoteShips) {
+        if (remoteShips[pid]) remoteShips[pid].kills = 0;
+      }
+    }
+
+    function getMatchStandings() {
+      if (isTeamMode()) {
+        const teams = {};
+        const add = (id, name, kills) => {
+          const t = getTeam(id);
+          if (!teams[t]) teams[t] = { team: t, name: TEAM_NAMES[t] || `TEAM ${t}`, kills: 0, members: [] };
+          teams[t].kills += kills || 0;
+          teams[t].members.push({ name, kills: kills || 0, id });
+        };
+        add(myId, (myShip && myShip.name) || "YOU", (myShip && myShip.kills) || 0);
+        for (const pid in remoteShips) {
+          const p = remoteShips[pid];
+          if (!p) continue;
+          add(Number(pid), p.name || `PILOT ${pid}`, p.kills || 0);
+        }
+        return Object.values(teams).sort((a, b) => b.kills - a.kills);
+      }
+      const list = [{ name: (myShip && myShip.name) || "YOU", kills: (myShip && myShip.kills) || 0, id: myId }];
+      for (const pid in remoteShips) {
+        const p = remoteShips[pid];
+        if (!p) continue;
+        list.push({ name: p.name || `PILOT ${pid}`, kills: p.kills || 0, id: Number(pid) });
+      }
+      list.sort((a, b) => b.kills - a.kills || a.name.localeCompare(b.name));
+      return list;
+    }
+
+    function finishMatch(reason) {
+      if (matchOver) return;
+      matchOver = true;
+      matchResults = getMatchStandings();
+      if (isTeamMode()) {
+        matchWinnerName = matchResults.length ? (matchResults[0].name + " TEAM") : "NOBODY";
+      } else {
+        matchWinnerName = matchResults.length ? matchResults[0].name : "NOBODY";
+      }
+      if (myShip) {
+        myShip.vx = 0;
+        myShip.vy = 0;
+        myShip.is_charging_shield = false;
+        myShip.shield_charge = 0;
+      }
+      statusMessage = reason || "Match complete.";
+      statusColor = CYAN;
+    }
+
+    function returnToLobbyFromMatch() {
+      matchOver = false;
+      matchResults = null;
+      lasers = [];
+      // leave room visually — back to main menu; reconnect flow stays up
+      setLobbyState(true);
+      menuMode = "main";
+      statusMessage = "Returned to hangar.";
+      statusColor = CYAN;
+      updateTouchUIVisibility();
+    }
+
     let netAccumulator = 0; const NET_TICK_RATE = 0.025; // 40 Hz for snappier HP / combat sync
     let worldSyncAccumulator = 0; const WORLD_SYNC_RATE = 0.2;
     let oreRegenAccumulator = 0; const ORE_REGEN_INTERVAL = 4.0; const MAX_WORLD_ORES = 40;
@@ -534,15 +788,20 @@
       };
     }
 
-    function applyDamageToRemote(targetId, dmg, stasisTime) {
+    function applyDamageToRemote(targetId, dmg, stasisTime, creditKill) {
       const id = Number(targetId);
       const rp = remoteShips[id];
       if (!rp) return;
       const amount = Number(dmg) || 1;
+      const wasAlive = rp.alive !== false && (Number.isFinite(rp.hp) ? rp.hp : 6) > 0;
       rp.hp = Math.max(0, (Number.isFinite(rp.hp) ? rp.hp : 6) - amount);
       if (rp.hp <= 0) {
         rp.alive = false;
         rp.hp = 0;
+        if (creditKill && wasAlive && myShip) {
+          myShip.kills = (myShip.kills || 0) + 1;
+          recordAccountStat("kills", 1);
+        }
       }
       if (stasisTime) rp.stasis = true;
     }
@@ -550,11 +809,11 @@
     function queueHit(targetId, dmg, stasisTime) {
       const id = Number(targetId);
       if (!Number.isFinite(id) || id === myId) return;
+      if (sameTeam(myId, id)) return; // friendly fire off in team modes
       const amount = Number(dmg) || 1;
       const st = stasisTime ? Number(stasisTime) : 0;
       pendingHits.push({ target: id, dmg: amount, stasis: st > 0 ? st : undefined });
-      // Optimistic local feedback — don't wait for round-trip
-      applyDamageToRemote(id, amount, st > 0 ? st : 0);
+      applyDamageToRemote(id, amount, st > 0 ? st : 0, true);
     }
 
     function initMyShip() {
@@ -580,6 +839,7 @@
         alive: true, 
         respawn_timer: 0, 
         xp: 0, 
+        kills: 0, 
         tier: 0, 
         current_node: "root",
         mana: 25.0, 
@@ -697,7 +957,7 @@
       ores.push(makeOre(-WORLD_BOUND * 0.7 + Math.random() * (WORLD_BOUND * 1.4), -WORLD_BOUND * 0.7 + Math.random() * (WORLD_BOUND * 1.4), Math.random() < 0.05)); 
     }
 
-    const keysDown = {}; let mousePos = { x: 0, y: 0 }; let fireKeyWasDown = false;
+    const keysDown = {}; let mousePos = { x: 0, y: 0 }; let fireKeyWasDown = false; let eKeyWasDown = false;
     window.addEventListener("mousemove", (e) => { mousePos = getCanvasCoords(e.clientX, e.clientY); });
 
     function handleMenuClick(pos) {
@@ -716,11 +976,18 @@
         }
         // Input selector
         if (pos.x >= cx - 140 && pos.x <= cx + 140) {
-          if (pos.y >= 210 && pos.y <= 248) authActiveField = "name";
-          if (pos.y >= 270 && pos.y <= 308) authActiveField = "pass";
+          if (pos.y >= 210 && pos.y <= 248) {
+            authActiveField = "name";
+            openMobileKeyboard("authName");
+          }
+          if (pos.y >= 270 && pos.y <= 308) {
+            authActiveField = "pass";
+            openMobileKeyboard("authPass");
+          }
         }
         // Action Button
         if (pos.x >= cx - 140 && pos.x <= cx + 140 && pos.y >= 335 && pos.y <= 380) {
+          closeMobileKeyboard();
           const accs = getAccounts();
           const u = authNameInput.trim().toUpperCase();
           const p = authPassInput.trim();
@@ -766,13 +1033,16 @@
       } else if (menuMode === "main") {
         if (pos.x >= cx - 150 && pos.x <= cx + 150 && pos.y >= 190 && pos.y <= 238) {
           if (!isConnected) connectWs();
+          applyMatchConfig({ mode: "ffa", useTimer: true, useKills: true, durationSec: 8 * 60, killLimit: 10 });
           sendMsg({ action: "list_public" }); 
           statusMessage = "Searching active public games..."; 
           statusColor = RAINBOW[3];
         } else if (pos.x >= cx - 150 && pos.x <= cx + 150 && pos.y >= 260 && pos.y <= 308) {
           menuMode = "host_private"; passwordInput = ""; activeInput = "pass";
+          openMobileKeyboard("roomPass");
         } else if (pos.x >= cx - 150 && pos.x <= cx + 150 && pos.y >= 330 && pos.y <= 378) {
           menuMode = "join_private"; roomCodeInput = ""; passwordInput = ""; activeInput = "code";
+          openMobileKeyboard("roomCode");
         } else if (pos.x >= cx - 60 && pos.x <= cx + 60 && pos.y >= 385 && pos.y <= 415) {
           sessionStorage.removeItem("astraclash_current_user");
           activePilot = null;
@@ -780,37 +1050,91 @@
           authPassInput = "";
           menuMode = "account";
           statusMessage = "Awaiting pilot identification...";
+          openMobileKeyboard("authName");
         }
       } else if (menuMode === "host_private") {
-        if (pos.x >= cx - 140 && pos.x <= cx - 10 && pos.y >= 340 && pos.y <= 382) {
+        // Mode select
+        if (pos.y >= 175 && pos.y <= 205) {
+          if (pos.x >= cx - 200 && pos.x <= cx - 70) matchConfig.mode = "ffa";
+          else if (pos.x >= cx - 60 && pos.x <= cx + 60) matchConfig.mode = "teams_3v3";
+          else if (pos.x >= cx + 70 && pos.x <= cx + 200) matchConfig.mode = "teams_2v2v2";
+          matchConfig = clampMatchConfig(matchConfig);
+        }
+        // Timer toggle
+        if (pos.x >= cx - 200 && pos.x <= cx - 40 && pos.y >= 220 && pos.y <= 248) {
+          matchConfig.useTimer = !matchConfig.useTimer;
+          matchConfig = clampMatchConfig(matchConfig);
+        }
+        // Timer - / +
+        if (matchConfig.useTimer) {
+          if (pos.x >= cx + 50 && pos.x <= cx + 90 && pos.y >= 220 && pos.y <= 248) {
+            matchConfig.durationSec = Math.max(60, matchConfig.durationSec - 60);
+          }
+          if (pos.x >= cx + 150 && pos.x <= cx + 190 && pos.y >= 220 && pos.y <= 248) {
+            matchConfig.durationSec = Math.min(MATCH_TIME_MAX_SEC, matchConfig.durationSec + 60);
+          }
+        }
+        // Kills toggle
+        if (pos.x >= cx - 200 && pos.x <= cx - 40 && pos.y >= 260 && pos.y <= 288) {
+          matchConfig.useKills = !matchConfig.useKills;
+          matchConfig = clampMatchConfig(matchConfig);
+        }
+        // Kills - / + (0 = unlimited)
+        if (matchConfig.useKills) {
+          if (pos.x >= cx + 50 && pos.x <= cx + 90 && pos.y >= 260 && pos.y <= 288) {
+            matchConfig.killLimit = Math.max(0, matchConfig.killLimit - 1);
+          }
+          if (pos.x >= cx + 150 && pos.x <= cx + 190 && pos.y >= 260 && pos.y <= 288) {
+            matchConfig.killLimit = Math.min(999, matchConfig.killLimit + 1);
+          }
+        }
+        // Password field
+        if (pos.x >= cx - 140 && pos.x <= cx + 140 && pos.y >= 310 && pos.y <= 346) {
+          activeInput = "pass";
+          openMobileKeyboard("roomPass");
+        } else if (pos.x >= cx - 140 && pos.x <= cx - 10 && pos.y >= 365 && pos.y <= 407) {
+          closeMobileKeyboard();
+          matchConfig = clampMatchConfig(matchConfig);
           if (!isConnected) connectWs();
           sendMsg({ action: "create_room", public: false, password: passwordInput || null }); 
           menuMode = "waiting"; 
           statusMessage = "Creating private arena...";
-        } else if (pos.x >= cx + 10 && pos.x <= cx + 140 && pos.y >= 340 && pos.y <= 382) { 
+        } else if (pos.x >= cx + 10 && pos.x <= cx + 140 && pos.y >= 365 && pos.y <= 407) { 
+          closeMobileKeyboard();
           menuMode = "main"; 
         }
       } else if (menuMode === "join_private") {
-        if (pos.x >= cx - 140 && pos.x <= cx + 140 && pos.y >= 245 && pos.y <= 279) activeInput = "code";
-        else if (pos.x >= cx - 140 && pos.x <= cx + 140 && pos.y >= 310 && pos.y <= 344) activeInput = "pass";
-        else if (pos.x >= cx - 140 && pos.x <= cx - 10 && pos.y >= 365 && pos.y <= 407 && roomCodeInput.length === 4) {
+        if (pos.x >= cx - 140 && pos.x <= cx + 140 && pos.y >= 245 && pos.y <= 279) {
+          activeInput = "code";
+          openMobileKeyboard("roomCode");
+        } else if (pos.x >= cx - 140 && pos.x <= cx + 140 && pos.y >= 310 && pos.y <= 344) {
+          activeInput = "pass";
+          openMobileKeyboard("roomPass");
+        } else if (pos.x >= cx - 140 && pos.x <= cx - 10 && pos.y >= 365 && pos.y <= 407 && roomCodeInput.length === 4) {
+          closeMobileKeyboard();
           if (!isConnected) connectWs();
           sendMsg({ action: "join_room", room_code: roomCodeInput, password: passwordInput || null }); 
           statusMessage = `Joining room [${roomCodeInput}]...`; 
           setLobbyState(false);
         } else if (pos.x >= cx + 10 && pos.x <= cx + 140 && pos.y >= 365 && pos.y <= 407) {
+          closeMobileKeyboard();
           menuMode = "main";
         }
       }
     }
 
-    canvas.addEventListener("click", (e) => { handleMenuClick(getCanvasCoords(e.clientX, e.clientY)); });
-    canvas.addEventListener("touchend", (e) => { 
-      if (inLobby && e.changedTouches && e.changedTouches.length > 0) { 
-        e.preventDefault(); 
-        handleMenuClick(getCanvasCoords(e.changedTouches[0].clientX, e.changedTouches[0].clientY)); 
-      } 
+    canvas.addEventListener("click", (e) => {
+      if (!inLobby && matchOver) { returnToLobbyFromMatch(); return; }
+      handleMenuClick(getCanvasCoords(e.clientX, e.clientY));
     });
+    canvas.addEventListener("touchend", (e) => { 
+      if (e.changedTouches && e.changedTouches.length > 0) {
+        if (!inLobby && matchOver) { returnToLobbyFromMatch(); return; }
+        if (inLobby) {
+          handleMenuClick(getCanvasCoords(e.changedTouches[0].clientX, e.changedTouches[0].clientY)); 
+        }
+      } 
+    }, { passive: true });
 
     window.addEventListener("keydown", (e) => {
       keysDown[e.code] = true;
@@ -1102,12 +1426,67 @@
           drawCard(vctx, cx - 60, 385, 120, 30, logHover ? RAINBOW[1] : GRAY); vctx.font = "12px Consolas"; vctx.fillStyle = logHover ? RAINBOW[1] : WHITE; vctx.textAlign = "center"; vctx.fillText("LOGOUT", cx, 404);
 
         } else if (menuMode === "host_private") {
-          drawCard(vctx, cx - 170, 190, 340, 220, CYAN); vctx.font = "bold 18px Consolas"; vctx.fillStyle = CYAN; vctx.textAlign = "center"; vctx.fillText("HOST PRIVATE ROOM (MAX 6)", cx, 225);
-          vctx.font = "12px Consolas"; vctx.fillStyle = WHITE; vctx.textAlign = "left"; vctx.fillText("Set Password (optional):", cx - 140, 265);
-          vctx.fillStyle = "rgb(25, 30, 45)"; vctx.fillRect(cx - 140, 280, 280, 36); vctx.strokeStyle = CYAN; vctx.strokeRect(cx - 140, 280, 280, 36);
-          vctx.font = "bold 18px Consolas"; vctx.fillStyle = RAINBOW[3]; vctx.fillText(passwordInput + "|", cx - 130, 305);
-          drawCard(vctx, cx - 140, 340, 130, 42, RAINBOW[4]); drawCard(vctx, cx + 10, 340, 130, 42, RAINBOW[1]);
-          vctx.textAlign = "center"; vctx.font = "14px Consolas"; vctx.fillStyle = RAINBOW[4]; vctx.fillText("CREATE", cx - 75, 366); vctx.fillStyle = RAINBOW[1]; vctx.fillText("BACK", cx + 75, 366);
+          drawCard(vctx, cx - 230, 100, 460, 380, CYAN);
+          vctx.font = "bold 18px Consolas"; vctx.fillStyle = CYAN; vctx.textAlign = "center";
+          vctx.fillText("HOST PRIVATE ROOM (MAX 6)", cx, 130);
+          vctx.font = "11px Consolas"; vctx.fillStyle = GRAY;
+          vctx.fillText("MODE", cx, 155);
+          // Mode buttons
+          const modes = [
+            { id: "ffa", label: "FFA", x: cx - 200 },
+            { id: "teams_3v3", label: "3v3", x: cx - 60 },
+            { id: "teams_2v2v2", label: "2v2v2", x: cx + 70 }
+          ];
+          for (const m of modes) {
+            const on = matchConfig.mode === m.id;
+            drawCard(vctx, m.x, 165, 120, 35, on ? CYAN : DARK_GRAY);
+            vctx.font = "bold 14px Consolas";
+            vctx.fillStyle = on ? CYAN : GRAY;
+            vctx.fillText(m.label, m.x + 60, 188);
+          }
+          // Timer row
+          drawCard(vctx, cx - 200, 215, 150, 30, matchConfig.useTimer ? CYAN : DARK_GRAY);
+          vctx.font = "12px Consolas";
+          vctx.fillStyle = matchConfig.useTimer ? WHITE : GRAY;
+          vctx.fillText(matchConfig.useTimer ? "TIMER ON" : "TIMER OFF", cx - 125, 235);
+          if (matchConfig.useTimer) {
+            drawCard(vctx, cx + 50, 215, 40, 30, GRAY);
+            drawCard(vctx, cx + 150, 215, 40, 30, GRAY);
+            vctx.fillStyle = WHITE;
+            vctx.fillText("-", cx + 70, 235);
+            vctx.fillText("+", cx + 170, 235);
+            vctx.fillStyle = RAINBOW[3];
+            vctx.font = "bold 14px Consolas";
+            vctx.fillText(`${Math.round(matchConfig.durationSec / 60)} MIN`, cx + 120, 235);
+          }
+          // Kills row
+          drawCard(vctx, cx - 200, 255, 150, 30, matchConfig.useKills ? CYAN : DARK_GRAY);
+          vctx.font = "12px Consolas";
+          vctx.fillStyle = matchConfig.useKills ? WHITE : GRAY;
+          vctx.fillText(matchConfig.useKills ? "KILLS ON" : "KILLS OFF", cx - 125, 275);
+          if (matchConfig.useKills) {
+            drawCard(vctx, cx + 50, 255, 40, 30, GRAY);
+            drawCard(vctx, cx + 150, 255, 40, 30, GRAY);
+            vctx.fillStyle = WHITE;
+            vctx.fillText("-", cx + 70, 275);
+            vctx.fillText("+", cx + 170, 275);
+            vctx.fillStyle = RAINBOW[3];
+            vctx.font = "bold 14px Consolas";
+            vctx.fillText(matchConfig.killLimit === 0 ? "UNLIM" : `${matchConfig.killLimit}`, cx + 120, 275);
+          }
+          // Password
+          vctx.font = "11px Consolas"; vctx.fillStyle = WHITE; vctx.textAlign = "left";
+          vctx.fillText("Password (optional):", cx - 140, 305);
+          drawCard(vctx, cx - 140, 310, 280, 36, activeInput === "pass" ? RAINBOW[3] : GRAY);
+          vctx.font = "bold 16px Consolas"; vctx.fillStyle = RAINBOW[3];
+          vctx.fillText((passwordInput || "") + (activeInput === "pass" ? "|" : ""), cx - 130, 334);
+          drawCard(vctx, cx - 140, 365, 130, 42, RAINBOW[4]);
+          drawCard(vctx, cx + 10, 365, 130, 42, RAINBOW[1]);
+          vctx.textAlign = "center"; vctx.font = "14px Consolas";
+          vctx.fillStyle = RAINBOW[4]; vctx.fillText("CREATE", cx - 75, 391);
+          vctx.fillStyle = RAINBOW[1]; vctx.fillText("BACK", cx + 75, 391);
+          vctx.font = "10px Consolas"; vctx.fillStyle = GRAY;
+          vctx.fillText("Timer max 20 min · Kill limit 0 = unlimited", cx, 450);
         } else if (menuMode === "join_private") {
           drawCard(vctx, cx - 170, 180, 340, 260, CYAN); vctx.font = "bold 18px Consolas"; vctx.fillStyle = CYAN; vctx.textAlign = "center"; vctx.fillText("ENTER PRIVATE LOBBY", cx, 215);
           vctx.font = "12px Consolas"; vctx.fillStyle = WHITE; vctx.textAlign = "left"; vctx.fillText("4-Letter Code:", cx - 140, 240);
@@ -1124,6 +1503,61 @@
     function updateGame(dt) {
       if (screenShake > 0) screenShake = Math.max(0, screenShake - dt * 40);
       if (!Number.isFinite(screenShake)) screenShake = 0;
+
+      // Match clock (host drives; others follow packets)
+      if (!matchOver) {
+        if (myId === 1) {
+          if (matchConfig.useTimer) {
+            matchTimeLeft = Math.max(0, matchTimeLeft - dt);
+          }
+          const standings = getMatchStandings();
+          const topKills = standings.length ? standings[0].kills : 0;
+          if (matchConfig.useKills && matchConfig.killLimit > 0 && topKills >= matchConfig.killLimit) {
+            const label = isTeamMode() ? (standings[0].name + " TEAM") : standings[0].name;
+            finishMatch(`${label} reached ${matchConfig.killLimit} kills!`);
+          } else if (matchConfig.useTimer && matchTimeLeft <= 0) {
+            finishMatch("Time limit reached!");
+          }
+        }
+      } else {
+        // Frozen combat — still allow return input
+        if (keysDown["Space"] || keysDown["Enter"] || keysDown["Escape"]) {
+          returnToLobbyFromMatch();
+          keysDown["Space"] = false;
+          keysDown["Enter"] = false;
+          keysDown["Escape"] = false;
+        }
+        // Skip the rest of simulation while results show
+        netAccumulator += dt;
+        if (netAccumulator >= NET_TICK_RATE) {
+          netAccumulator = 0;
+          if (myShip && myId === 1) {
+            sendMsg({
+              action: "game_packet",
+              payload: {
+                ship: {
+                  id: myShip.id,
+                  world_x: Number(myShip.world_x.toFixed(1)),
+                  world_y: Number(myShip.world_y.toFixed(1)),
+                  angle: Math.round(myShip.angle),
+                  hp: myShip.hp,
+                  max_hp: myShip.max_hp,
+                  alive: myShip.alive,
+                  xp: myShip.xp,
+                  kills: myShip.kills || 0,
+                  stasis: false,
+                  name: myShip.name
+                },
+                match_config: matchConfig,
+                match_time: matchTimeLeft,
+                match_over: true,
+                match_reason: statusMessage
+              }
+            });
+          }
+        }
+        return;
+      }
 
       if (lasers.length > 80) lasers.splice(0, lasers.length - 80);
       if (particles.length > 120) particles.splice(0, particles.length - 120);
@@ -1178,13 +1612,46 @@
       if (myShip && myShip.alive) {
         let turn = 0; if (keysDown["KeyA"] || keysDown["ArrowLeft"]) turn += 1; if (keysDown["KeyD"] || keysDown["ArrowRight"]) turn -= 1; myShip.angle += turn * myShip.rot_speed;
 
-        if (myShip.stasis_timer <= 0) {
-          if (myShip.can_dash && keysDown["KeyE"] && myShip.mana >= 40 && myShip.dash_cooldown <= 0) {
-            myShip.mana -= 40; myShip.dash_cooldown = 1.5; const rad = myShip.angle * Math.PI / 180; myShip.world_x += Math.cos(rad) * 350; myShip.world_y -= Math.sin(rad) * 350; spawnParticles(myShip.world_x, myShip.world_y, CYAN, 15);
-          } else if (myShip.has_stasis_field) {
-            if (keysDown["KeyE"] && myShip.mana > 0) {
-              myShip.is_charging_shield = true; myShip.shield_charge = Math.min(myShip.shield_charge + dt, 3.0); myShip.mana -= dt * 15; 
-            } else if (myShip.is_charging_shield) { emitStasis(); myShip.is_charging_shield = false; myShip.shield_charge = 0; }
+        {
+          const eHeld = !!keysDown["KeyE"];
+          const eTap = eHeld && !eKeyWasDown;
+          eKeyWasDown = eHeld;
+
+          if (myShip.stasis_timer <= 0) {
+            if (myShip.can_dash && eTap && myShip.mana >= 40 && myShip.dash_cooldown <= 0) {
+              myShip.mana -= 40;
+              myShip.dash_cooldown = 1.5;
+              const rad = myShip.angle * Math.PI / 180;
+              myShip.world_x += Math.cos(rad) * 350;
+              myShip.world_y -= Math.sin(rad) * 350;
+              spawnParticles(myShip.world_x, myShip.world_y, CYAN, 15);
+            } else if (myShip.has_stasis_field) {
+              // Press E: start force field around ship. Press E again: launch it.
+              if (eTap) {
+                if (!myShip.is_charging_shield) {
+                  if (myShip.mana > 5) {
+                    myShip.is_charging_shield = true;
+                    myShip.shield_charge = 0.15; // starts as a small field around you
+                  }
+                } else {
+                  emitStasis();
+                  myShip.is_charging_shield = false;
+                  myShip.shield_charge = 0;
+                }
+              }
+              // Grow the field over time while active (drains mana)
+              if (myShip.is_charging_shield) {
+                if (myShip.mana > 0) {
+                  myShip.shield_charge = Math.min(myShip.shield_charge + dt * 0.85, 3.0);
+                  myShip.mana = Math.max(0, myShip.mana - dt * 12);
+                } else {
+                  // Out of mana — auto-launch at current size
+                  emitStasis();
+                  myShip.is_charging_shield = false;
+                  myShip.shield_charge = 0;
+                }
+              }
+            }
           }
         }
 
@@ -1260,6 +1727,7 @@
             for (const pid in remoteShips) {
               const p = remoteShips[pid];
               if (!p || !p.alive || p.hp <= 0) continue;
+              if (sameTeam(myId, p.id)) continue;
               if (!visibleFrom(myShip.world_x, myShip.world_y, p.world_x, p.world_y)) continue;
               const dSq = (p.world_x - l.x) * (p.world_x - l.x) + (p.world_y - l.y) * (p.world_y - l.y);
               if (dSq < minDSq) { minDSq = dSq; target = p; }
@@ -1470,10 +1938,25 @@
               max_hp: myShip.max_hp, 
               alive: myShip.alive, 
               xp: myShip.xp, 
+              kills: myShip.kills || 0, 
               stasis: myShip.stasis_timer > 0, 
               name: myShip.name 
             } 
           };
+          if (myId === 1) {
+            outPayload.match_config = {
+              mode: matchConfig.mode,
+              useTimer: matchConfig.useTimer,
+              useKills: matchConfig.useKills,
+              durationSec: matchConfig.durationSec,
+              killLimit: matchConfig.killLimit
+            };
+            outPayload.match_time = Number(matchTimeLeft.toFixed(1));
+            if (matchOver) {
+              outPayload.match_over = true;
+              outPayload.match_reason = statusMessage;
+            }
+          }
           if (outgoingLaserQueue.length > 0) { 
             outPayload.new_lasers = outgoingLaserQueue; 
             outgoingLaserQueue = []; 
@@ -1578,7 +2061,9 @@
             vctx.fillStyle = `rgba(200, 200, 255, 0.4)`; vctx.strokeStyle = `rgb(255, 255, 255)`; vctx.beginPath(); 
             vctx.arc(ox, oy, SHIP_SIZE + 15, 0, Math.PI * 2); vctx.fill(); vctx.stroke(); 
           }
-          vctx.font = "bold 10px Consolas"; vctx.fillStyle = WHITE; vctx.textAlign = "center"; vctx.fillText(p.name, ox, oy - 38);
+          vctx.font = "bold 10px Consolas";
+          vctx.fillStyle = isTeamMode() ? (TEAM_COLORS[getTeam(p.id)] || WHITE) : WHITE;
+          vctx.textAlign = "center"; vctx.fillText(p.name, ox, oy - 38);
           vctx.fillStyle = "rgb(255, 50, 50)"; vctx.fillRect(ox - 17, oy - 28, 34, 5); 
           const pct = Math.max(0.0, Math.min(1.0, p.hp / (p.max_hp || 6))); vctx.fillStyle = RAINBOW[4]; vctx.fillRect(ox - 17, oy - 28, Math.floor(34 * pct), 5);
         } else { 
@@ -1619,7 +2104,27 @@
       drawDirectShip(vctx, cx, cy, myShip.angle, myShip.color, isDead);
 
       if (myShip.is_charging_shield) {
-        const chargeRad = 15 + (myShip.shield_charge || 0) * 25; vctx.fillStyle = `rgba(0, 255, 255, 0.2)`; vctx.strokeStyle = `rgb(0, 255, 255)`; vctx.lineWidth = 1; vctx.beginPath(); vctx.arc(cx, cy, chargeRad, 0, Math.PI * 2); vctx.fill(); vctx.stroke();
+        const charge = myShip.shield_charge || 0;
+        const chargeRad = 18 + charge * 28;
+        // Outer soft glow
+        vctx.fillStyle = `rgba(0, 200, 255, ${0.12 + charge * 0.08})`;
+        vctx.beginPath();
+        vctx.arc(cx, cy, chargeRad + 6, 0, Math.PI * 2);
+        vctx.fill();
+        // Main force field bubble around the ship
+        vctx.fillStyle = `rgba(0, 255, 255, ${0.18 + charge * 0.1})`;
+        vctx.strokeStyle = `rgb(0, 255, 255)`;
+        vctx.lineWidth = 2 + charge * 0.6;
+        vctx.beginPath();
+        vctx.arc(cx, cy, chargeRad, 0, Math.PI * 2);
+        vctx.fill();
+        vctx.stroke();
+        // Inner ring
+        vctx.strokeStyle = `rgba(180, 255, 255, 0.7)`;
+        vctx.lineWidth = 1;
+        vctx.beginPath();
+        vctx.arc(cx, cy, Math.max(12, chargeRad * 0.55), 0, Math.PI * 2);
+        vctx.stroke();
       }
 
       if (myShip.stasis_timer > 0) {
@@ -1638,10 +2143,44 @@
         vctx.font = "18px Consolas"; vctx.fillStyle = WHITE; vctx.fillText(`RESPAWNING IN ${Math.max(1, Math.ceil(myShip.respawn_timer))}s`, cx, cy + 20);
       }
 
-      const players = [{ name: myShip.name, xp: myShip.xp }].concat(Object.values(remoteShips).map(p => ({ name: p.name, xp: p.xp || 0 }))); players.sort((a, b) => b.xp - a.xp);
-      vctx.fillStyle = "rgba(10, 10, 20, 0.7)"; vctx.fillRect(V_WIDTH - 160, 80, 150, 25 + players.length * 20);
-      vctx.font = "bold 12px Consolas"; vctx.textAlign = "left"; vctx.fillStyle = CYAN; vctx.fillText("LEADERBOARD", V_WIDTH - 150, 95);
-      for (let i = 0; i < players.length; i++) { vctx.fillStyle = WHITE; vctx.fillText(`#${i+1} ${players[i].name} - ${players[i].xp}`, V_WIDTH - 150, 115 + i * 20); }
+      {
+        const board = isTeamMode() ? getMatchStandings() : (
+          [{ name: myShip.name, kills: myShip.kills || 0 }].concat(Object.values(remoteShips).map(p => ({ name: p.name, kills: p.kills || 0 }))).sort((a, b) => b.kills - a.kills)
+        );
+        vctx.fillStyle = "rgba(10, 10, 20, 0.7)";
+        vctx.fillRect(V_WIDTH - 170, 80, 160, 25 + board.length * 20);
+        vctx.font = "bold 12px Consolas"; vctx.textAlign = "left"; vctx.fillStyle = CYAN;
+        vctx.fillText(isTeamMode() ? "TEAMS" : "LEADERBOARD", V_WIDTH - 160, 95);
+        for (let i = 0; i < board.length; i++) {
+          const k = board[i].kills || 0;
+          if (isTeamMode()) {
+            vctx.fillStyle = TEAM_COLORS[board[i].team] || WHITE;
+            vctx.fillText(`#${i+1} ${board[i].name} - ${k}`, V_WIDTH - 160, 115 + i * 20);
+          } else {
+            vctx.fillStyle = WHITE;
+            vctx.fillText(`#${i+1} ${board[i].name} - ${k} kill${k === 1 ? "" : "s"}`, V_WIDTH - 160, 115 + i * 20);
+          }
+        }
+      }
+
+      // Match timer (center-top under XP bar)
+      const mt = Math.max(0, matchTimeLeft);
+      const mins = Math.floor(mt / 60);
+      const secs = Math.floor(mt % 60);
+      const timeStr = `${mins}:${secs.toString().padStart(2, "0")}`;
+      vctx.font = "bold 16px Consolas";
+      vctx.textAlign = "center";
+      vctx.fillStyle = mt <= 30 ? RAINBOW[1] : (mt <= 60 ? RAINBOW[3] : WHITE);
+      vctx.fillText(timeStr, V_WIDTH / 2, 70);
+      vctx.font = "10px Consolas";
+      vctx.fillStyle = GRAY;
+      let ruleBits = [];
+      if (matchConfig.mode === "teams_3v3") ruleBits.push("3v3");
+      else if (matchConfig.mode === "teams_2v2v2") ruleBits.push("2v2v2");
+      else ruleBits.push("FFA");
+      if (matchConfig.useKills) ruleBits.push(matchConfig.killLimit > 0 ? `TO ${matchConfig.killLimit}` : "KILLS OPEN");
+      if (matchConfig.useTimer) ruleBits.push("TIMED");
+      vctx.fillText(ruleBits.join("  ·  "), V_WIDTH / 2, 84);
 
       const bm = 20; const by = 18; const bw = V_WIDTH - 40; const bh = 14; vctx.fillStyle = XP_BG; vctx.fillRect(bm, by, bw, bh);
       // Fill relative to current tier → next upgrade (not total max XP)
@@ -1658,14 +2197,29 @@
       vctx.fillStyle = XP_BG; vctx.fillRect(20, 42, 140, 8);
       vctx.fillStyle = CYAN; vctx.fillRect(20, 42, Math.floor(140 * manaPct), 8);
 
+      // Force field strength bar (blue) — only when you have the upgrade / are charging
+      if (myShip.has_stasis_field) {
+        const fieldPct = Math.min(1, (myShip.shield_charge || 0) / 3.0);
+        vctx.fillStyle = XP_BG;
+        vctx.fillRect(20, 54, 140, 8);
+        vctx.fillStyle = fieldPct > 0 ? "rgb(40, 180, 255)" : "rgb(30, 50, 70)";
+        vctx.fillRect(20, 54, Math.floor(140 * fieldPct), 8);
+        vctx.strokeStyle = "rgba(0, 180, 255, 0.6)";
+        vctx.lineWidth = 1;
+        vctx.strokeRect(20, 54, 140, 8);
+      }
+
       let apLabel = "LOCKED";
       if (myShip.can_dash) apLabel = myShip.dash_cooldown <= 0 && myShip.mana >= 40 ? "PHASE DASH READY" : "RECHARGING";
-      else if (myShip.has_stasis_field) apLabel = myShip.is_charging_shield ? "CHARGING..." : "HOLD E TO CHARGE";
-      else apLabel = "PASSIVE ONLY";
+      else if (myShip.has_stasis_field) {
+        apLabel = myShip.is_charging_shield ? "E AGAIN TO LAUNCH" : "PRESS E FOR FIELD";
+      } else apLabel = "PASSIVE ONLY";
       vctx.font = "11px Consolas"; vctx.textAlign = "left";
-      vctx.fillStyle = (myShip.can_dash && myShip.dash_cooldown <= 0) || myShip.has_stasis_field ? CYAN : WHITE; vctx.fillText(`ABILITY (E): ${apLabel}`, 20, 62);
+      const abilY = myShip.has_stasis_field ? 74 : 62;
+      vctx.fillStyle = (myShip.can_dash && myShip.dash_cooldown <= 0) || myShip.has_stasis_field ? CYAN : WHITE;
+      vctx.fillText(`ABILITY (E): ${apLabel}`, 20, abilY);
 
-      if (myShip.alive && myShip.hp > 0) {
+      if (!matchOver && myShip.alive && myShip.hp > 0) {
         const currentNode = myShip.current_node; const options = UPGRADE_TREE[currentNode]?.children || []; const nextTier = myShip.tier + 1;
         if (options.length > 0 && nextTier < TIER_XP_THRESHOLDS.length && myShip.xp >= TIER_XP_THRESHOLDS[nextTier]) {
           drawCard(vctx, V_WIDTH / 2 - 275, 38, 550, 46, RAINBOW[4]);
@@ -1674,6 +2228,39 @@
             vctx.fillText(`[${i + 1}] ${optData.name}: ${optData.desc}`, V_WIDTH / 2 - 265, 50 + i * 13);
           }
         }
+      }
+
+      // Match results overlay
+      if (matchOver) {
+        vctx.fillStyle = "rgba(5, 8, 18, 0.82)";
+        vctx.fillRect(0, 0, V_WIDTH, V_HEIGHT);
+        drawCard(vctx, V_WIDTH / 2 - 220, 120, 440, 320, CYAN);
+        vctx.textAlign = "center";
+        vctx.font = "bold 28px Consolas";
+        vctx.fillStyle = CYAN;
+        vctx.fillText("MATCH COMPLETE", V_WIDTH / 2, 165);
+        vctx.font = "bold 18px Consolas";
+        vctx.fillStyle = RAINBOW[3];
+        vctx.fillText(`WINNER: ${matchWinnerName || "—"}`, V_WIDTH / 2, 200);
+        const board = matchResults || getMatchStandings();
+        vctx.font = "14px Consolas";
+        vctx.textAlign = "left";
+        for (let i = 0; i < Math.min(board.length, 6); i++) {
+          const k = board[i].kills || 0;
+          if (isTeamMode()) {
+            vctx.fillStyle = TEAM_COLORS[board[i].team] || WHITE;
+            vctx.fillText(`${i + 1}. ${board[i].name}`, V_WIDTH / 2 - 160, 240 + i * 24);
+            vctx.fillText(`${k} kills`, V_WIDTH / 2 + 80, 240 + i * 24);
+          } else {
+            vctx.fillStyle = i === 0 ? RAINBOW[4] : WHITE;
+            vctx.fillText(`${i + 1}. ${board[i].name}`, V_WIDTH / 2 - 160, 240 + i * 24);
+            vctx.fillText(`${k} kill${k === 1 ? "" : "s"}`, V_WIDTH / 2 + 80, 240 + i * 24);
+          }
+        }
+        vctx.textAlign = "center";
+        vctx.font = "12px Consolas";
+        vctx.fillStyle = GRAY;
+        vctx.fillText("PRESS SPACE / ENTER — RETURN TO HANGAR", V_WIDTH / 2, 410);
       }
     }
   </script>
